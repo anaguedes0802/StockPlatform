@@ -1,0 +1,75 @@
+[project]
+name = "stockplatform-api"
+version = "0.1.0"
+description = "StockPlatform FastAPI backend"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "pydantic>=2.9",
+  "pydantic-settings>=2.6",
+  "sqlalchemy>=2.0",
+  "alembic>=1.13",
+  "psycopg[binary]>=3.2",
+  "redis>=5.2",
+  "httpx>=0.27",
+  "tenacity>=9.0",
+
+  # auth
+  "passlib[bcrypt]>=1.7",
+  "python-jose[cryptography]>=3.3",
+  "pyotp>=2.9",
+
+  # market data
+  "yfinance>=0.2.43",
+  "curl_cffi>=0.15",      # browser TLS impersonation; without it Yahoo rate-limits yfinance
+  "lxml>=5.0",            # yfinance earnings-history scrape (stock-selection backtest)
+  "pypdf>=4.0",           # House Clerk STOCK Act PTR parsing (congress_ptr.py)
+  "pandas>=2.2",
+  "numpy>=1.26",
+
+  # indicators
+  "pandas-ta-classic>=0.3.0; python_version < '4'",
+
+  # ML
+  "scikit-learn>=1.5",
+  "xgboost>=2.1",
+  "shap>=0.46",
+  "joblib>=1.4",
+  "statsforecast>=2.0",   # Nixtla — AutoARIMA, AutoETS, etc.
+  "optuna>=4.0",          # Bayesian hyperparameter tuning
+  "scipy>=1.13",          # mean-variance portfolio optimization (also pulled in by statsforecast)
+
+  # backtest
+  "vectorbt>=0.26",
+
+  # logging
+  "structlog>=24.4",
+
+  # optional AI chat (only used if ANTHROPIC_API_KEY set)
+  "anthropic>=0.40",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.7",
+  "mypy>=1.13",
+  "httpx>=0.27",
+]
+ml-deep = [
+  "torch>=2.4",
+  "transformers>=4.45",   # finBERT + BART zero-shot via HuggingFace pipeline
+]
+social = [
+  "praw>=7.7",            # Reddit API (optional; set REDDIT_CLIENT_ID/SECRET)
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E","F","I","UP","B","SIM","RUF"]
+ignore = ["E501"]
