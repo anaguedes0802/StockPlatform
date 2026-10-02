@@ -1,0 +1,287 @@
+# Multi-timeframe swing agent — the ONE configuration file.
+#
+# Every phase (data, regimes, strategies, agent, backtest, paper) reads its
+# settings from here, so a run is fully described by this file + the seed.
+# Paths are relative to apps/api/.
+
+seed = 20261002
+
+[market]
+# Chosen in phase 1: US stocks + US ETFs. Reasons: free consolidated (SIP)
+# intraday history since 2016 incl. delisted names (Alpaca), same vendor for
+# paper trading, regular sessions (VWAP / opening-range logic needs a session).
+# Crypto trades 24/7 (no session, higher fees); FX was rejected in v6.
+asset_class = "us_equities_etfs"
+account_currency = "USD"
+capital_eur = 10000
+tax_residence = "PT"
+
+[data]
+provider = "alpaca"
+feed = "sip"                       # consolidated tape; free when the query ends >15 min ago
+history_start = "2016-01-04"       # first session Alpaca serves SIP intraday bars for
+intraday_timeframe = "15Min"       # 1h is resampled from 15m, aligned to the 09:30 open
+daily_fallback = "yahoo"           # only for the daily series Alpaca lacks (e.g. ^VIX)
+max_requests_per_min = 180         # Alpaca free plan allows 200
+root = "artifacts/swing_agent"
+
+[universe]
+index = "sp500"
+membership_url = "https://raw.githubusercontent.com/fja05680/sp500/master/S%26P%20500%20Historical%20Components%20%26%20Changes%20(Updated).csv"
+top_n = 40                         # most liquid point-in-time members, re-ranked monthly
+rank_lookback_sessions = 63        # median dollar volume over the ~3 months BEFORE the rebalance
+min_coverage = 0.9                 # share of lookback sessions that must have a bar
+min_price = 5.0                    # raw (unadjusted) close, USD
+min_median_dollar_volume = 50e6
+same_company_corr = 0.95           # daily-return correlation above which two names are one company
+references = ["SPY", "QQQ"]        # benchmarks, also tradable
+context_etfs = ["IWM", "DIA", "XLK", "XLF", "XLE", "XLV", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE", "XLC", "TLT", "GLD", "HYG"]
+
+[universe.cik_overrides]
+# Only where no automatic route works (ticker since reused by another company).
+# Accepted only if SEC's name for the CIK matches and it filed earnings 8-Ks
+# while the key was in the index (checked by `swing_agent_data.py cik`).
+"APC@2019-08-08" = { cik = 773910, name = "ANADARKO" }
+"AGN@2020-05-11" = { cik = 1578845, name = "ALLERGAN PLC" }   # name search finds the pre-2015 Allergan Inc
+
+[splits]
+# 2016 is indicator warm-up only. Research = train + validation. The final
+# test is read once, at the end, through store.FinalTestLock.
+warmup = ["2016-01-04", "2016-12-31"]
+train = ["2017-01-01", "2021-12-31"]       # 2018 Q4, Feb-2018 vol spike, 2020 crash
+validation = ["2022-01-01", "2023-12-31"]  # 2022 bear, 2023 bank failures
+test = ["2024-01-01", "2026-09-30"]        # Aug-2024 unwind, Apr-2025 tariff crash
+
+[events]
+earnings_source = "nasdaq"         # api.nasdaq.com calendar by date (has BMO/AMC timing)
+macro = ["fomc", "cpi", "nfp"]
+
+# ---------------------------------------------------------------------------
+# Phase 2 — regimes. Thresholds are textbook values fixed BEFORE looking at
+# any result; every variant tried afterwards goes to experiments.jsonl.
+# ---------------------------------------------------------------------------
+
+[regime.daily]
+# Market (macro) regime from SPY, VIX and point-in-time breadth, computed at
+# each close and usable from the next session (VIX settles at 16:15).
+benchmark = "SPY"
+structure = "two_axis"        # trend × vol; "priority" = version 1 (high vol overrides all), see SWING_AGENT.md § 2
+sma_fast = 50
+sma_slow = 200
+slope_fast_days = 10          # SMA50 slope measured over 10 sessions, in ATRs/day
+adx_period = 14
+adx_trend = 20                # ADX ≥ 20 = trending
+atr_period = 14
+atr_rank_window = 252         # ATR% percentile vs the trailing year
+atr_rank_high = 0.90          # top-decile ATR% below the SMA50 also counts as high vol
+vix_high_enter = 25.0         # enter high-vol at VIX ≥ 25 ...
+vix_high_exit = 20.0          # ... and leave only below 20 (hysteresis)
+breadth_ma = 50               # breadth = share of S&P 500 members above their 50-day SMA
+breadth_bull_min = 0.50       # a bull market needs at least half the index participating
+confirm_days = 2              # a calmer regime must hold 2 closes; high-vol switches at once
+
+[regime.stock]
+# The same trend rules on each stock (no VIX / breadth), for phase 3.
+structure = "two_axis"
+sma_fast = 50
+sma_slow = 200
+slope_fast_days = 10
+adx_period = 14
+adx_trend = 20
+atr_period = 14
+atr_rank_window = 252
+atr_rank_high = 0.90
+confirm_days = 2
+
+[regime.intraday]
+# Micro regime on each 1h close (10:30 … 15:30, 16:00), from the 15m bars
+# of the session so far. Distances are in daily ATRs as of yesterday.
+gap_atr = 0.5                 # |open − prev close| ≥ 0.5 ATR = gap day
+relvol_lookback = 20          # sessions for the same-time-of-day volume / range baselines
+gap_go_relvol = 1.5           # gap-and-go needs volume ≥ 1.5× normal for the time of day
+trend_side_share = 0.75       # trend: ≥ 75% of 15m closes on one side of VWAP ...
+trend_dist_atr = 0.25         # ... and close ≥ 0.25 ATR away from VWAP
+reversal_ext_atr = 0.5        # reversal: an extension ≥ 0.5 ATR from the open, then back through VWAP
+vol_expand = 1.3              # range so far ≥ 1.3× normal for the time of day = expanding
+vol_compress = 0.7            # ≤ 0.7× = compressing
+
+[regime.eval]
+forward_days = 10             # daily: forward return / realized vol horizon
+drawdown_min = 0.10           # benchmark drawdowns ≥ 10% are scored for detection lag
+
+# ---------------------------------------------------------------------------
+# Phase 3 — execution, costs and the individual strategies. Values fixed
+# BEFORE the first backtest (textbook / Alpaca's real fee schedule).
+# ---------------------------------------------------------------------------
+
+[execution]
+signal_window = ["10:00", "15:30"]   # a signal may fire on a 15m bar closing in this window
+                                     # (no first / last 30 minutes); it fills at the NEXT bar's open
+moc_decision_minutes = 15            # end-of-day exits are decided on the bar closing 15 min
+                                     # before the close and filled in the closing auction
+max_positions = 5
+risk_per_trade = 0.01                # 1% of equity between fill and initial stop
+max_position_pct = 0.20              # cash account: 5 positions × 20% = 100%, so the 5th always fits
+max_gross = 1.0                      # no margin
+max_order_pct_volume = 0.01          # order ≤ 1% of the median 15m volume (never binds at €10k)
+earnings_block_sessions = 5          # no entry if a report's reaction session is within 5 sessions
+exit_before_earnings = true          # held positions leave in the auction before the reaction session
+macro_no_entry = ["fomc"]            # no entries on FOMC days (14:00 ET statement)
+macro_late_start = { cpi = "10:30", nfp = "10:30" }   # 08:30 releases: no entries before 10:30
+initial_capital_eur = 10000
+eurusd_fallback = 1.10               # used only if the EUR/USD history is unavailable
+
+[costs]
+# Alpaca: $0 commission. Sell-side regulatory fees are passed through.
+commission_per_share = 0.0
+sec_fee_per_million = 27.80          # Section 31, sells only (2024–25 rate)
+finra_taf_per_share = 0.000166       # sells only, capped below
+finra_taf_max = 8.30
+half_spread_bps_min = 1.0            # half-spread ≥ 1 bp ...
+half_spread_cents = 0.5              # ... and ≥ half a cent
+slippage_market_bps = 2.0            # market order at a bar's open
+slippage_stop_bps = 5.0              # stop turned market order (fast tape)
+slippage_moc_bps = 1.0               # closing auction
+# limit (take-profit) fills pay no spread/slippage but need a trade THROUGH the price
+
+[strategy.pullback]
+# Uptrend (stock's own daily regime = bull) + short-term oversold daily, then
+# an intraday reclaim of the session VWAP after trading below it.
+rsi_period = 3
+rsi_max = 30.0
+stop_atr = 1.5
+target_atr = 3.0
+trail_after_atr = 1.5
+trail_atr = 1.5
+max_sessions = 10
+
+[strategy.vwap_reversion]
+# Long-term uptrend, very oversold daily (RSI(2)), then buy an intraday
+# stretch ≥ 0.5 ATR below the session VWAP; leave once the close is back
+# above its 5-day average.
+sma_trend = 200
+rsi2_max = 10.0
+stretch_atr = 0.5
+exit_sma = 5
+stop_atr = 2.5
+max_sessions = 5
+
+[strategy.compression_breakout]
+# Bollinger bandwidth in the bottom 20% of its last 6 months, above the
+# 50-day average, then a 15m close above the 20-day high on ≥ 1.2× volume.
+bb_period = 20
+bb_k = 2.0
+bw_rank_window = 126
+bw_rank_max = 0.20
+donchian = 20
+relvol_min = 1.2
+sma_trend = 50
+stop_atr = 1.5
+target_atr = 3.0
+trail_after_atr = 1.5
+trail_atr = 2.0
+max_sessions = 10
+
+[strategy.gap_go]
+# Gap up ≥ 0.5 ATR above a rising 50-day average, holding above the open and
+# the VWAP on ≥ 1.5× volume, morning only. Stop under the session low.
+gap_atr = 0.5
+relvol_min = 1.5
+sma_trend = 50
+latest_signal = "11:30"
+stop_min_atr = 0.5
+stop_max_atr = 1.5
+target_atr = 2.0
+trail_after_atr = 1.0
+trail_atr = 1.0
+max_sessions = 5
+
+# ---------------------------------------------------------------------------
+# Intraday-only hypotheses (asked for after phase 3). Flat at the close
+# (max_sessions = 0 → exit in that day's closing auction). Parameters are
+# literature / phase-2 values written down BEFORE the first run.
+# ---------------------------------------------------------------------------
+
+[strategy.gap_fade_down]
+# H1 (phase-2 finding): a large cap that gapped down ≥ 0.5 ATR and is still
+# below its open and VWAP on ≥ 1.5× volume tends to recover into the close.
+intraday = true
+gap_atr = 0.5
+relvol_min = 1.5
+first_signal = "10:30"
+latest_signal = "14:30"
+stop_atr = 1.5
+max_sessions = 0
+
+[strategy.liquidity_sweep]
+# H2 ("smart money"): price takes out yesterday's low, then a 15m bar closes
+# back above it. Stop under the sweep low.
+intraday = true
+first_signal = "10:00"
+latest_signal = "14:30"
+stop_buffer_atr = 0.1
+stop_min_atr = 0.25
+stop_max_atr = 1.0
+max_sessions = 0
+
+[strategy.last_half_hour]
+# H3 (Gao, Han, Li & Zhou 2018): the first half hour's return (prev close →
+# 10:00) predicts the last half hour's. SPY / QQQ only: buy at 15:30 if the
+# first half hour was up, sell in the auction.
+intraday = true
+symbols = ["SPY", "QQQ"]
+stop_atr = 0.5
+max_sessions = 0
+
+[strategy.orb30]
+# H4 (control): 30-minute opening-range breakout, long, by 12:00, ≥ 1.2×
+# volume; stop at the range low (0.25–1.0 ATR).
+intraday = true
+latest_signal = "12:00"
+relvol_min = 1.2
+stop_min_atr = 0.25
+stop_max_atr = 1.0
+max_sessions = 0
+
+# ---------------------------------------------------------------------------
+# Studies asked for after phase 3 ("which stocks to buy?", "new companies?").
+# Rules written BEFORE the first run. Research window only (≤ 2023-12-31);
+# events split into train (2016/17–2020) and validation (2021–2022/23).
+# ---------------------------------------------------------------------------
+
+[study.selection]
+# A. The platform's production composite (app/ml/stock_selection.py), code and
+# weights UNCHANGED, re-run on the point-in-time S&P 500 including names that
+# later left or died, against the same rule on today's survivors only.
+top = 0.10
+hold = 21
+offsets = 21                 # median over every rebalance-day alignment
+variants = ["momentum_only", "full_composite"]
+# yfinance has no earnings history for delisted companies: in full_composite
+# their surprise counts as neutral (the composite's own rule for missing data).
+# Sectors (for sector-relative momentum) = the SPDR sector ETF each stock's
+# daily returns correlate with most, for survivors and delisted alike.
+
+[study.ipo]
+# B. Every US IPO priced 2016-01 … 2022-12 (Nasdaq IPO calendar), held 252
+# sessions from three entry points, vs SPY over the same days.
+first_month = "2016-01"
+last_month = "2022-12"
+min_offer_usd = 50e6
+min_price = 5.0
+exclude_name_regex = "(?i)acquisition|merger|blank check|spac\\b"   # SPACs
+exclude_symbol_suffix = ["U", "W", "R", "WS"]                         # units, warrants, rights
+entries = [0, 21, 126]       # sessions after the first close: day 1, ~1 month, ~lock-up expiry
+horizon = 252
+cost_round_trip = 0.005      # wider spreads in young stocks
+train_until = "2020-12-31"
+
+[study.spinoff]
+# C. Every spin-off by an S&P 500 member (at the ex-date) 2016 … 2022 in
+# Alpaca's corporate actions: buy the NEW company at its first regular close
+# on/after the ex-date, hold 126 / 252 sessions, vs SPY.
+first = "2016-01-01"
+last = "2022-12-31"
+horizons = [126, 252]
+cost_round_trip = 0.002
+train_until = "2020-12-31"
