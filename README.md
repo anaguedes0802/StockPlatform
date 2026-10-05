@@ -161,6 +161,10 @@ The first forecast for a symbol trains the models on the fly (about a minute), t
 
 Python 3.11 · FastAPI · Pydantic v2 · SQLAlchemy 2 · Alembic · PostgreSQL/TimescaleDB · SQLite · Redis · pandas · NumPy · scikit-learn · XGBoost · SHAP · statsforecast (AutoARIMA) · statsmodels (HMM) · Optuna · PyTorch (optional LSTM) · Hugging Face transformers (finBERT, BART-MNLI) · Groq / Gemini / Anthropic / Ollama · Jinja2 · Tailwind CSS · Alpine.js · TradingView Lightweight Charts · Chart.js · Docker Compose · GitHub Actions
 
+## How it was built
+
+Built with AI-assisted development (coding assistants for implementation). The research questions, validation methodology, decision rules and interpretation of the results are mine.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).
