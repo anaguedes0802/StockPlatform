@@ -1,0 +1,703 @@
+{% extends "base.html" %}
+
+{# Stat tile (the page-local <Stat/> of the original). label/value/cls are JS expressions. #}
+{% macro stat(label, value, cls="''", big=False) -%}
+<div class="card p-3">
+  <div class="text-[10px] uppercase tracking-wide text-muted" x-text="{{ label }}"></div>
+  <div class="font-mono tabular mt-1 {{ 'text-xl' if big else 'text-sm' }}" :class="{{ cls }}" x-text="{{ value }}"></div>
+</div>
+{%- endmacro %}
+
+{# "Strong buy / Accumulate / Normal" badge for an InvestTiming (JS expression `t`). #}
+{% macro timing_badge(t) -%}
+<span :class="cn('text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded inline-flex items-center gap-1', timingBadge({{ t }}).cls)">
+  <i data-lucide="trending-down" class="size-3"></i> <span x-text="timingBadge({{ t }}).label"></span>
+</span>
+{%- endmacro %}
+
+{# Armed / Disarmed chip for bot `b`. #}
+{% macro armed_chip() -%}
+<span :class="cn('text-xs inline-flex items-center gap-1 px-2 py-0.5 rounded', b.armed ? 'bg-success/20 text-success' : 'bg-surface2 text-muted')">
+  <span x-show="b.armed" class="inline-flex"><i data-lucide="shield-check" class="size-3"></i></span>
+  <span x-show="!b.armed" class="inline-flex"><i data-lucide="shield-alert" class="size-3"></i></span>
+  <span x-text="b.armed ? 'Armed' : 'Disarmed'"></span>
+</span>
+{%- endmacro %}
+
+{% block head %}
+<script src="{{ url_for('static', path='js/trading_bot.js') }}"></script>
+{% endblock %}
+
+{% block content %}
+<div x-data="tradingBotPage()" class="p-6 space-y-6">
+  <div class="flex items-start gap-3">
+    <div class="size-9 rounded-md bg-accent/20 grid place-items-center mt-0.5">
+      <i data-lucide="bot" class="size-5 text-accent"></i>
+    </div>
+    <div>
+      <h1 class="text-2xl font-semibold tracking-tight">Trading bots</h1>
+      <p class="text-sm text-muted mt-1" x-text="config?.description ?? 'Automated trend-filtered mean-reversion strategy.'"></p>
+      <p class="text-xs text-muted mt-1">
+        Quant entry trigger + an <span class="text-text">AI risk-gate</span> that reviews news &amp; smart-money
+        data and can veto or downsize each trade.
+        <template x-if="config?.llm">
+          <span :class="config.llm.available ? 'text-success' : 'text-warning'"
+                x-text="'AI gate ' + (config.llm.available ? `online (${config.llm.providers.join(', ')})` : 'offline — trades on the quant signal alone')"></span>
+        </template>
+      </p>
+      <p class="text-xs text-muted mt-1">
+        Looking for trade ideas rather than bots? See
+        <a href="/opportunities" class="text-accent hover:underline">Opportunities</a>.
+      </p>
+    </div>
+  </div>
+
+  <!-- Backtest panel -->
+  <div class="card p-4 flex flex-wrap items-end gap-3">
+    <label class="block text-xs">
+      <span class="block text-muted mb-1">Mode</span>
+      <select x-model="mode" class="bg-surface2 border border-line rounded px-2 py-1">
+        <option value="portfolio">Portfolio (pooled win rate)</option>
+        <option value="single">Single symbol</option>
+      </select>
+    </label>
+    <template x-if="mode === 'single'">
+      <label class="block text-xs">
+        <span class="block text-muted mb-1">Symbol</span>
+        <input x-model="symbol" class="bg-surface2 border border-line rounded px-2 py-1 font-mono uppercase w-28">
+      </label>
+    </template>
+    <button @click="runBacktest()" :disabled="busy" class="rounded bg-accent text-bg font-medium px-4 py-2 disabled:opacity-50 text-sm inline-flex items-center gap-2">
+      <i data-lucide="activity" class="size-4"></i> <span x-text="busy ? 'Backtesting…' : 'Run backtest'"></span>
+    </button>
+    <template x-if="config">
+      <div class="ml-auto text-xs text-muted font-mono" x-text="strategyLine"></div>
+    </template>
+  </div>
+
+  <template x-if="err">
+    <div class="card p-4 text-sm text-danger" x-text="err"></div>
+  </template>
+
+  <!-- Portfolio result -->
+  <template x-if="portfolio">
+    <div class="space-y-6">
+      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        {{ stat("'Pooled win rate'", "fmtPct(portfolio.pooled.win_rate_pct)", "portfolio.pooled.win_rate_pct >= 80 ? 'text-success' : 'text-warning'", big=True) }}
+        {{ stat("'Trades'", "String(portfolio.pooled.n_trades)") }}
+        {{ stat("'Profit factor'", "fmtNumber(portfolio.pooled.profit_factor ?? 0)") }}
+        {{ stat("'Avg win'", "fmtPct(portfolio.pooled.avg_win_pct)", "'text-success'") }}
+        {{ stat("'Avg loss'", "fmtPct(portfolio.pooled.avg_loss_pct)", "'text-danger'") }}
+        {{ stat("'Expectancy'", "fmtPct(portfolio.pooled.expectancy_pct)", "changeColor(portfolio.pooled.expectancy_pct)") }}
+      </div>
+      <div class="card overflow-x-auto">
+        <div class="card-header" x-text="`Per-symbol (${portfolio.universe.length})`"></div>
+        <table class="w-full text-sm">
+          <thead class="text-xs uppercase tracking-wide text-muted border-b border-line">
+            <tr>
+              <th class="text-left px-4 py-2">Symbol</th>
+              <th class="text-right px-4 py-2">Trades</th>
+              <th class="text-right px-4 py-2">Win %</th>
+              <th class="text-right px-4 py-2">Profit factor</th>
+              <th class="text-right px-4 py-2">Total return</th>
+              <th class="text-right px-4 py-2">Max DD</th>
+              <th class="text-right px-4 py-2">Sharpe</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="row in Object.entries(portfolio.per_symbol)" :key="row[0]">
+              <tr class="border-b border-line last:border-0">
+                <td class="px-4 py-2 font-mono" x-text="row[0]"></td>
+                <td class="px-4 py-2 text-right tabular" x-text="row[1].n_trades"></td>
+                <td :class="cn('px-4 py-2 text-right tabular', row[1].win_rate_pct >= 80 ? 'text-success' : '')" x-text="fmtPct(row[1].win_rate_pct)"></td>
+                <td class="px-4 py-2 text-right tabular" x-text="fmtNumber(row[1].profit_factor ?? 0)"></td>
+                <td :class="cn('px-4 py-2 text-right tabular', changeColor(row[1].total_return_pct))" x-text="fmtPct(row[1].total_return_pct)"></td>
+                <td class="px-4 py-2 text-right tabular text-danger" x-text="fmtPct(row[1].max_drawdown_pct)"></td>
+                <td class="px-4 py-2 text-right tabular" x-text="fmtNumber(row[1].sharpe)"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </template>
+
+  <!-- Single-symbol result -->
+  <template x-if="single">
+    <div class="space-y-6">
+      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        {{ stat("`${single.symbol} win rate`", "fmtPct(single.metrics.win_rate_pct)", "single.metrics.win_rate_pct >= 80 ? 'text-success' : 'text-warning'", big=True) }}
+        {{ stat("'Trades'", "`${single.metrics.n_wins}/${single.metrics.n_trades}`") }}
+        {{ stat("'Profit factor'", "fmtNumber(single.metrics.profit_factor ?? 0)") }}
+        {{ stat("'Total return'", "fmtPct(single.metrics.total_return_pct)", "changeColor(single.metrics.total_return_pct)") }}
+        {{ stat("'Max DD'", "fmtPct(single.metrics.max_drawdown_pct)", "'text-danger'") }}
+        {{ stat("'Sharpe'", "fmtNumber(single.metrics.sharpe)") }}
+      </div>
+      <div class="card">
+        <div class="card-header">Equity curve</div>
+        <!-- strategy curve; benchmark omitted for the single view (same curve twice, as the original) -->
+        <div class="px-4 py-3">
+          <div x-init="$nextTick(() => equityChart($el, single.equity_curve, single.equity_curve))" style="height: 320px"></div>
+        </div>
+      </div>
+      <template x-if="single.trades.length > 0">
+        <div class="card overflow-x-auto">
+          <div class="card-header" x-text="`Trades (${single.trades.length})`"></div>
+          <table class="w-full text-sm">
+            <thead class="text-xs uppercase tracking-wide text-muted border-b border-line">
+              <tr>
+                <th class="text-left px-4 py-2">Entry</th>
+                <th class="text-left px-4 py-2">Exit</th>
+                <th class="text-right px-4 py-2">Return</th>
+                <th class="text-right px-4 py-2">Bars</th>
+                <th class="text-left px-4 py-2">Reason</th>
+                <th class="text-center px-4 py-2">W/L</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="(t, i) in single.trades.slice(-50).reverse()" :key="i">
+                <tr class="border-b border-line last:border-0">
+                  <td class="px-4 py-2 tabular" x-text="t.entry_ts.slice(0, 10)"></td>
+                  <td class="px-4 py-2 tabular" x-text="t.exit_ts.slice(0, 10)"></td>
+                  <td :class="cn('px-4 py-2 text-right tabular', changeColor(t.return_pct))" x-text="fmtPct(t.return_pct)"></td>
+                  <td class="px-4 py-2 text-right tabular" x-text="t.bars_held"></td>
+                  <td class="px-4 py-2 text-muted" x-text="t.exit_reason"></td>
+                  <td :class="cn('px-4 py-2 text-center', t.win ? 'text-success' : 'text-danger')" x-text="t.win ? 'W' : 'L'"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </template>
+    </div>
+  </template>
+
+  <!-- Live broker -->
+  <template x-if="$store.auth.me">
+    <div class="card">
+      <div class="card-header flex items-center justify-between">
+        <span class="inline-flex items-center gap-2">
+          Brokerage
+          <span :class="cn('text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded', brokerPaper ? 'bg-accent/20 text-accent' : 'bg-danger/20 text-danger')"
+                x-text="brokerPaper ? 'Paper' : 'Live money'"></span>
+        </span>
+        <button @click="refreshAccount()" class="rounded border border-line text-muted hover:text-text px-2 py-1 text-xs inline-flex items-center gap-1">
+          <i data-lucide="refresh-cw" class="size-3"></i> Refresh
+        </button>
+      </div>
+
+      <template x-if="!brokerConfigured">
+        <div class="px-4 py-4 text-sm text-muted">
+          No Alpaca trading credentials configured. Set <code class="font-mono text-xs">ALPACA_API_KEY</code> and
+          <code class="font-mono text-xs">ALPACA_API_SECRET</code> (paper keys) on the API to enable live execution.
+        </div>
+      </template>
+
+      <template x-if="brokerConfigured && account?.account">
+        <div>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4">
+            {{ stat("'Equity'", "fmtUsd(account.account.equity)", big=True) }}
+            {{ stat("'Buying power'", "fmtUsd(account.account.buying_power)") }}
+            {{ stat("'Cash'", "fmtUsd(account.account.cash)") }}
+            {{ stat("'Market'", "account.market_open ? 'Open' : 'Closed'", "account.market_open ? 'text-success' : 'text-muted'") }}
+          </div>
+          <div class="px-4 pb-2 text-xs uppercase tracking-wide text-muted" x-text="`Open positions (${account.positions.length})`"></div>
+          <template x-if="account.positions.length === 0">
+            <div class="px-4 pb-4 text-sm text-muted">No open positions.</div>
+          </template>
+          <template x-if="account.positions.length > 0">
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead class="text-xs uppercase tracking-wide text-muted border-b border-line">
+                  <tr>
+                    <th class="text-left px-4 py-2">Symbol</th>
+                    <th class="text-right px-4 py-2">Qty</th>
+                    <th class="text-right px-4 py-2">Avg entry</th>
+                    <th class="text-right px-4 py-2">Price</th>
+                    <th class="text-right px-4 py-2">Value</th>
+                    <th class="text-right px-4 py-2">Unrealized P/L</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="p in account.positions" :key="p.symbol">
+                    <tr class="border-b border-line last:border-0">
+                      <td class="px-4 py-2 font-mono" x-text="p.symbol"></td>
+                      <td class="px-4 py-2 text-right tabular" x-text="fmtNumber(p.qty)"></td>
+                      <td class="px-4 py-2 text-right tabular" x-text="fmtUsd(p.avg_entry_price)"></td>
+                      <td class="px-4 py-2 text-right tabular" x-text="fmtUsd(p.current_price)"></td>
+                      <td class="px-4 py-2 text-right tabular" x-text="fmtUsd(p.market_value)"></td>
+                      <td :class="cn('px-4 py-2 text-right tabular', changeColor(p.unrealized_pl))"
+                          x-text="`${fmtUsd(p.unrealized_pl)} (${fmtPct(p.unrealized_plpc)})`"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </template>
+        </div>
+      </template>
+    </div>
+  </template>
+
+  <!-- AI gate track record: forward-test scorecard of the LLM risk-gate -->
+  <template x-if="gateErr">
+    <div class="card p-4 text-xs text-muted" x-text="`AI gate track record unavailable: ${gateErr}`"></div>
+  </template>
+  <template x-if="!gateErr && gate">
+    <div :class="cn('card border-l-4', TB_GATE_STYLE[gate.verdict.label] ?? 'border-l-line')">
+      <div class="card-header flex items-center gap-2">
+        <i data-lucide="sparkles" class="size-4 text-accent"></i> AI gate track record
+        <span class="text-xs text-muted font-normal" x-text="gateCounts(gate)"></span>
+      </div>
+      <div class="p-4 space-y-3 text-sm">
+        <div x-text="gate.verdict.summary"></div>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+          <template x-for="k in ['approve', 'downsize', 'veto']" :key="k">
+            <div class="rounded border border-line p-2">
+              <div class="uppercase tracking-wide text-muted text-[10px]" x-text="`${k}d · ${gate.counts[k]}`"></div>
+              <div class="font-mono mt-1" x-text="gateOutcome(gate, k)"></div>
+            </div>
+          </template>
+        </div>
+        <div class="text-xs text-muted" x-text="gateValueText(gate)"></div>
+        <template x-if="gate.recent.length > 0">
+          <div class="overflow-x-auto max-h-64">
+            <table class="w-full text-xs font-mono">
+              <thead class="text-muted"><tr><th class="text-left">When</th><th class="text-left">Symbol</th><th class="text-left">Decision</th><th class="text-right">Trade R</th><th class="text-left pl-3">Why</th></tr></thead>
+              <tbody>
+                <template x-for="d in gate.recent" :key="d.id">
+                  <tr class="border-t border-line align-top">
+                    <td class="py-1" x-text="d.as_of"></td>
+                    <td x-text="d.symbol"></td>
+                    <td :class="decisionCls(d.decision)" x-text="d.decision"></td>
+                    <td :class="cn('text-right', changeColor(d.trade_r))" x-text="d.trade_r != null ? fmtNumber(d.trade_r, 2) : 'open'"></td>
+                    <td class="pl-3 text-muted font-sans" x-text="(d.rationale ?? '').slice(0, 140)"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </template>
+      </div>
+    </div>
+  </template>
+
+  <!-- Market-wide "good time to invest?" banner (investor bots) -->
+  <template x-if="$store.auth.me && marketTiming && marketTiming.level !== 'NORMAL'">
+    <div :class="cn('card px-4 py-3 flex items-start gap-3 border-l-4', marketTiming.level === 'STRONG_BUY' ? 'border-l-success' : 'border-l-accent')">
+      <span :class="cn('inline-flex mt-0.5', marketTiming.level === 'STRONG_BUY' ? 'text-success' : 'text-accent')"><i data-lucide="piggy-bank" class="size-5"></i></span>
+      <div class="space-y-0.5">
+        <div class="flex items-center gap-2 flex-wrap">
+          {{ timing_badge("marketTiming") }}
+          <span class="text-sm font-medium" x-text="marketTiming.headline"></span>
+        </div>
+        <div class="text-xs text-muted"
+             x-text="(marketTiming.rationale ?? `SPY is ${marketTiming.drawdown_from_high_pct}% below its 1-year high.`) + ' Your investor bots can deploy idle cash now — and you choose whether to add more.'"></div>
+      </div>
+    </div>
+  </template>
+
+  <!-- A/B experiments: bots that share an `experiment` tag -->
+  <template x-for="e in ($store.auth.me && exps) || []" :key="e.experiment">
+    <div class="card">
+      <div class="card-header flex items-center gap-2 flex-wrap">
+        <i data-lucide="brain-circuit" class="size-4 text-accent"></i> <span x-text="`Experiment · ${e.experiment.replace(/_/g, ' ')}`"></span>
+        <span class="text-xs text-muted font-normal" x-text="expDays(e)"></span>
+      </div>
+      <div class="p-4 space-y-3 text-sm">
+        <template x-if="e.description">
+          <div class="text-xs text-muted" x-text="e.description"></div>
+        </template>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <template x-for="x in e.arms" :key="x.bot_id">
+            <div class="rounded border border-line p-3 space-y-1">
+              <div class="text-xs uppercase tracking-wide text-muted" x-text="`${x.arm ?? 'arm'} · ML filter ${x.ml_filter ? 'on' : 'off'}`"></div>
+              <template x-if="x.sim">
+                <div class="font-mono text-xs space-y-0.5">
+                  <div><span x-text="`equity ${fmtUsd(x.sim.equity)}`"></span> <span :class="changeColor(x.sim.return_pct)" x-text="`(${fmtPct(x.sim.return_pct)})`"></span></div>
+                  <div x-text="`${x.sim.closed_trades} closed · ${x.sim.win_rate_pct ?? '—'}% winners · realized ${fmtUsd(x.sim.realized_pl)}`"></div>
+                  <div x-text="`${x.sim.positions.length} open: ${x.sim.positions.map((p) => p.symbol).join(', ') || 'none'}`"></div>
+                </div>
+              </template>
+              <template x-if="!x.sim">
+                <div class="text-xs text-muted">Waiting for its first scheduled run.</div>
+              </template>
+            </div>
+          </template>
+        </div>
+        <template x-if="expHasChart(e)">
+          <div x-effect="drawExpChart($el, e)" style="height: 320px"></div>
+        </template>
+        <div class="text-[11px] text-muted" x-text="expNote(e)"></div>
+      </div>
+    </div>
+  </template>
+
+  <!-- Saved bots -->
+  <div class="card">
+    <div class="card-header flex items-center justify-between">
+      <span x-text="'Your bots ' + (bots ? `(${bots.length})` : '')"></span>
+      <template x-if="$store.auth.me">
+        <div class="flex items-center gap-2 flex-wrap">
+          <button @click="createBot('trader')" class="rounded border border-line text-muted hover:text-text px-3 py-1 text-xs inline-flex items-center gap-1">
+            <i data-lucide="plus" class="size-3"></i> Trading bot
+          </button>
+          <button @click="createBot('investor')" class="rounded border border-line text-muted hover:text-text px-3 py-1 text-xs inline-flex items-center gap-1">
+            <i data-lucide="piggy-bank" class="size-3"></i> Investor (ETF)
+          </button>
+          <button @click="createBot('picker')" class="rounded border border-line text-muted hover:text-text px-3 py-1 text-xs inline-flex items-center gap-1">
+            <i data-lucide="sparkles" class="size-3"></i> Stock-picker
+          </button>
+        </div>
+      </template>
+    </div>
+    <div x-show="$store.auth.ready && !$store.auth.me" x-cloak class="px-4 py-4 text-sm text-muted">Log in to create a bot, then scan its universe for today&apos;s entry signals (paper only — no real orders).</div>
+    <template x-if="$store.auth.me && bots && bots.length === 0">
+      <div class="px-4 py-4 text-sm text-muted">No bots yet. Create one to scan the default universe for live signals.</div>
+    </template>
+    <template x-for="b in ($store.auth.me && bots) || []" :key="b.id">
+      <div class="px-4 py-3 border-b border-line last:border-0 space-y-2">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span :class="cn('size-2 rounded-full', b.status === 'active' ? 'bg-success' : 'bg-muted')"></span>
+          <span class="font-medium" x-text="b.name"></span>
+          <span :class="cn('text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded inline-flex items-center gap-1', isInvestor(b) ? 'bg-success/15 text-success' : 'bg-accent/15 text-accent')">
+            <span x-show="isInvestor(b)" class="inline-flex"><i data-lucide="piggy-bank" class="size-3"></i></span>
+            <span x-show="!isInvestor(b)" class="inline-flex"><i data-lucide="bot" class="size-3"></i></span>
+            <span x-text="isInvestor(b) ? 'Investor' : 'Trader'"></span>
+          </span>
+          <span class="text-xs text-muted" x-text="`${b.universe.length} ${isInvestor(b) ? 'holdings' : 'symbols'}`"></span>
+          <div class="ml-auto flex items-center gap-2">
+            <button @click="scanBot(b)" :disabled="scanning === b.id" class="rounded border border-line text-muted hover:text-text px-2 py-1 text-xs inline-flex items-center gap-1 disabled:opacity-50">
+              <span :class="cn('inline-flex', scanning === b.id && 'animate-spin')"><i data-lucide="refresh-cw" class="size-3"></i></span>
+              <span x-text="isInvestor(b) ? 'Check timing' : 'Scan now'"></span>
+            </button>
+            <button @click="toggleBot(b)" class="rounded border border-line text-muted hover:text-text px-2 py-1 text-xs inline-flex items-center gap-1">
+              <span x-show="b.status === 'active'" class="inline-flex"><i data-lucide="pause" class="size-3"></i></span>
+              <span x-show="b.status !== 'active'" class="inline-flex"><i data-lucide="play" class="size-3"></i></span>
+              <span x-text="b.status === 'active' ? 'Pause' : 'Activate'"></span>
+            </button>
+            <button @click="deleteBot(b)" class="rounded border border-line text-muted hover:text-danger px-2 py-1 text-xs">
+              <i data-lucide="trash-2" class="size-3"></i>
+            </button>
+          </div>
+        </div>
+        <template x-if="!isInvestor(b) && b.last_run_at">
+          <div class="text-xs text-muted">
+            <span x-text="`Last run ${new Date(b.last_run_at).toLocaleString()} ·`"></span>
+            <span x-show="buysOf(b).length" class="text-success" x-text="`BUY: ${buysOf(b).map((s) => s.symbol).join(', ')}`"></span>
+            <span x-show="!buysOf(b).length">No entry signals right now</span>
+          </div>
+        </template>
+
+        <!-- Investor bot controls -->
+        <template x-if="isInvestor(b)">
+          <div x-data="{ contribution: 0 }" class="rounded border border-line bg-surface2/40 p-3 space-y-3">
+            <!-- What it holds -->
+            <div class="space-y-1">
+              <div class="text-[11px] uppercase tracking-wide text-muted inline-flex items-center gap-1">
+                <span x-show="isPicker(b)" class="inline-flex"><i data-lucide="sparkles" class="size-3"></i></span>
+                <span x-text="holdsLabel(b)"></span>
+              </div>
+              <template x-if="isPicker(b) && picks(b) && picks(b).length > 0">
+                <div class="flex flex-wrap gap-1.5">
+                  <template x-for="p in picks(b)" :key="p.symbol">
+                    <span class="text-[11px] font-mono px-1.5 py-0.5 rounded bg-accent/10 border border-accent/30"><span x-text="p.symbol"></span><template x-if="p.percentile != null"><span class="text-muted" x-text="` ${p.percentile}%ile`"></span></template></span>
+                  </template>
+                </div>
+              </template>
+              <template x-if="isPicker(b) && !(picks(b) && picks(b).length > 0)">
+                <div class="text-[11px] text-muted">Picked dynamically each run — hit Preview to see today&apos;s top names.</div>
+              </template>
+              <template x-if="!isPicker(b)">
+                <div class="flex flex-wrap gap-1.5">
+                  <template x-for="pair in allocEntries(b)" :key="pair[0]">
+                    <span class="text-[11px] font-mono px-1.5 py-0.5 rounded bg-surface2 border border-line"><span x-text="pair[0]"></span> <span class="text-muted" x-text="`${allocPct(b, pair[1])}%`"></span></span>
+                  </template>
+                </div>
+              </template>
+            </div>
+
+            <!-- Timing recommendation -->
+            <template x-if="invTiming(b)">
+              <div class="rounded border border-line p-2 space-y-1">
+                <div class="flex items-center gap-2 flex-wrap">
+                  {{ timing_badge("invTiming(b)") }}
+                  <span class="text-xs font-medium" x-text="invTiming(b).headline"></span>
+                  <span class="ml-auto text-[11px] text-muted font-mono" x-text="`SPY ${invTiming(b).drawdown_from_high_pct}% off high`"></span>
+                </div>
+                <template x-if="invTiming(b).rationale">
+                  <div class="text-[11px] text-muted" x-text="invTiming(b).rationale"></div>
+                </template>
+              </div>
+            </template>
+
+            <!-- Arm + contribution + actions -->
+            <div class="flex items-center gap-2 flex-wrap">
+              {{ armed_chip() }}
+              <label class="text-[11px] text-muted inline-flex items-center gap-1">
+                Add&nbsp;$
+                <input type="number" min="0" step="100" :value="contribution"
+                       @input="contribution = tbClampInput($event, 0)"
+                       class="w-24 bg-surface2 border border-line rounded px-2 py-1 text-xs tabular"
+                       placeholder="0">
+              </label>
+              <div class="ml-auto flex items-center gap-2">
+                <button @click="previewInvest(b, contribution)" class="rounded border border-line text-muted hover:text-text px-2 py-1 text-xs inline-flex items-center gap-1">
+                  <i data-lucide="refresh-cw" class="size-3"></i> Preview
+                </button>
+                <template x-if="!b.armed">
+                  <button @click="setArmed(b, true)" :disabled="!brokerReady" :title="brokerReady ? '' : 'Add Alpaca credentials first'"
+                          class="rounded border border-success/40 text-success hover:bg-success/10 px-2 py-1 text-xs inline-flex items-center gap-1 disabled:opacity-40">
+                    <i data-lucide="zap" class="size-3"></i> Arm
+                  </button>
+                </template>
+                <template x-if="b.armed">
+                  <button @click="setArmed(b, false)" class="rounded border border-line text-muted hover:text-text px-2 py-1 text-xs inline-flex items-center gap-1">
+                    <i data-lucide="zap-off" class="size-3"></i> Disarm
+                  </button>
+                </template>
+                <button @click="runInvest(b, contribution)" :disabled="!b.armed || running === b.id"
+                        class="rounded bg-success text-bg font-medium px-3 py-1 text-xs inline-flex items-center gap-1 disabled:opacity-40">
+                  <span :class="cn('inline-flex', running === b.id && 'animate-spin')"><i data-lucide="piggy-bank" class="size-3"></i></span>
+                  <span x-text="running === b.id ? 'Investing…' : 'Invest now'"></span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Plan preview -->
+            <template x-if="invPlan(b)">
+              <div class="text-xs space-y-1">
+                <div class="text-[11px] text-muted">
+                  <span x-text="planLine(invPlan(b))"></span><template x-if="invPlan(b).equity_tilt_applied > 0"><span class="text-accent" x-text="` · dip tilt ×${invPlan(b).equity_tilt_applied}`"></span></template>
+                </div>
+                <template x-if="invPlan(b).orders.length === 0">
+                  <div class="text-muted">Nothing to buy — allocation is on target.</div>
+                </template>
+                <template x-if="invPlan(b).orders.length > 0">
+                  <ul class="space-y-0.5">
+                    <template x-for="o in invPlan(b).orders" :key="o.symbol">
+                      <li class="font-mono"><span class="text-success">BUY</span> <span x-text="o.symbol"></span><span class="text-muted" x-text="` · ${fmtUsd(o.notional)} → ${o.target_pct}%`"></span></li>
+                    </template>
+                  </ul>
+                </template>
+              </div>
+            </template>
+
+            <!-- Run outcome -->
+            <template x-if="investRun[b.id]">
+              <div class="text-xs">
+                <template x-if="investRun[b.id].blocked">
+                  <div class="text-warning" x-text="`Blocked: ${investRun[b.id].blocked.replace(/_/g, ' ')}`"></div>
+                </template>
+                <template x-if="!investRun[b.id].blocked && investBuys(investRun[b.id]) === 0">
+                  <div class="text-muted">No buys placed this pass.</div>
+                </template>
+                <template x-if="!investRun[b.id].blocked && investBuys(investRun[b.id]) > 0">
+                  <div class="text-success" x-text="`Placed ${investBuys(investRun[b.id])} buy order(s)${investRun[b.id].mode === 'paper' ? ' (paper)' : ' (LIVE)'}.`"></div>
+                </template>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- Trader bot (live execution) controls -->
+        <template x-if="!isInvestor(b)">
+          <div class="rounded border border-line bg-surface2/40 p-3 space-y-2">
+            <div class="flex items-center gap-2 flex-wrap">
+              {{ armed_chip() }}
+              <button @click="toggleGate(b)" title="Toggle the AI news + smart-money risk-gate"
+                      :class="cn('text-xs inline-flex items-center gap-1 px-2 py-0.5 rounded border', gateOn(b) ? 'border-accent/40 text-accent' : 'border-line text-muted')">
+                <i data-lucide="sparkles" class="size-3"></i>
+                <span x-text="`AI gate ${gateOn(b) ? 'on' : 'off'}`"></span>
+              </button>
+              <button @click="toggleFilter(b)"
+                      title="ML signal filter: skips signals a model rates below average. Off by default: in walk-forward tests it did not help the ETF breakout. See the Swing Trading page to test it on this setup."
+                      :class="cn('text-xs inline-flex items-center gap-1 px-2 py-0.5 rounded border', b.dsl?.ml_filter ? 'border-accent/40 text-accent' : 'border-line text-muted')">
+                <i data-lucide="brain-circuit" class="size-3"></i>
+                <span x-text="`ML filter ${b.dsl?.ml_filter ? 'on' : 'off'}`"></span>
+              </button>
+              <template x-if="b.execution">
+                <span class="text-[11px] text-muted font-mono"
+                      x-text="`cap ${fmtUsd(b.execution.max_position_usd)} · ≤${b.execution.max_daily_orders} orders/day · stop at ${fmtUsd(b.execution.max_daily_loss_usd)} loss`"></span>
+              </template>
+              <div class="ml-auto flex items-center gap-2">
+                <template x-if="!b.armed">
+                  <button @click="setArmed(b, true)" :disabled="armDisabled(b)" :title="armTitle(b)"
+                          class="rounded border border-success/40 text-success hover:bg-success/10 px-2 py-1 text-xs inline-flex items-center gap-1 disabled:opacity-40">
+                    <i data-lucide="zap" class="size-3"></i> Arm
+                  </button>
+                </template>
+                <template x-if="b.armed">
+                  <button @click="setArmed(b, false)" class="rounded border border-line text-muted hover:text-text px-2 py-1 text-xs inline-flex items-center gap-1">
+                    <i data-lucide="zap-off" class="size-3"></i> Disarm
+                  </button>
+                </template>
+                <button @click="runLive(b)" :disabled="!b.armed || running === b.id"
+                        class="rounded bg-accent text-bg font-medium px-3 py-1 text-xs inline-flex items-center gap-1 disabled:opacity-40">
+                  <span :class="cn('inline-flex', running === b.id && 'animate-spin')"><i data-lucide="activity" class="size-3"></i></span>
+                  <span x-text="running === b.id ? 'Running…' : 'Run live'"></span>
+                </button>
+              </div>
+            </div>
+
+            <template x-if="b.run_state && b.run_state.orders_today != null">
+              <div class="text-[11px] text-muted" x-text="`Today: ${b.run_state.orders_today ?? 0} orders · ${fmtUsd(b.run_state.realized_loss_today ?? 0)} realized loss`"></div>
+            </template>
+
+            <!-- Swing bot summary -->
+            <template x-if="isSwing(b)">
+              <div class="text-[11px] space-y-1">
+                <div class="text-muted">
+                  <span class="text-accent" x-text="`Swing · ${String(b.dsl.kind).replace('swing_', '')}`"></span>
+                  <span x-text="`· risks ${b.execution?.risk_per_trade_pct ?? 1}% of equity per trade · ≤${b.execution?.max_open_positions ?? 5} positions ·`"></span>
+                  whole shares with a GTC broker stop · exits before earnings
+                </div>
+                <template x-if="swingTracked(b).length > 0">
+                  <table class="w-full font-mono">
+                    <thead class="text-muted">
+                      <tr><th class="text-left">Held</th><th class="text-left">Since</th><th class="text-right">Stop</th><th class="text-right">Target</th><th class="text-right">Stop lives at</th></tr>
+                    </thead>
+                    <tbody>
+                      <template x-for="pair in swingTracked(b)" :key="pair[0]">
+                        <tr>
+                          <td x-text="pair[0]"></td>
+                          <td x-text="pair[1].entry_date ?? '—'"></td>
+                          <td class="text-right text-danger" x-text="pair[1].stop != null ? fmtNumber(pair[1].stop) : '—'"></td>
+                          <td class="text-right" x-text="pair[1].target != null ? fmtNumber(pair[1].target) : 'trailing'"></td>
+                          <td :class="cn('text-right', pair[1].protective === 'broker' ? 'text-success' : 'text-warning')"
+                              x-text="pair[1].protective === 'broker' ? 'broker' : 'software only'"></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </template>
+              </div>
+            </template>
+
+            <!-- A bot's private simulated paper account (broker "sim") -->
+            <template x-if="b.sim">
+              <div class="text-[11px] space-y-1">
+                <div class="text-muted">
+                  <span class="text-accent">Simulated paper account</span> · equity <span x-text="fmtUsd(b.sim.equity)"></span> <span :class="changeColor(b.sim.return_pct)" x-text="`(${fmtPct(b.sim.return_pct)})`"></span> · cash <span x-text="fmtUsd(b.sim.cash)"></span> · <span x-text="simTail(b.sim, !!b.execution?.autorun)"></span>
+                </div>
+                <template x-if="b.sim.positions.length > 0">
+                  <table class="w-full font-mono">
+                    <thead class="text-muted"><tr><th class="text-left">Held</th><th class="text-right">Qty</th><th class="text-right">Entry</th><th class="text-right">Last</th><th class="text-right">Target</th><th class="text-right">Stop</th><th class="text-right">P&amp;L</th></tr></thead>
+                    <tbody>
+                      <template x-for="p in b.sim.positions" :key="p.symbol">
+                        <tr>
+                          <td x-text="p.symbol"></td><td class="text-right" x-text="p.qty"></td>
+                          <td class="text-right" x-text="fmtNumber(p.avg_entry_price)"></td><td class="text-right" x-text="fmtNumber(p.last_price)"></td>
+                          <td class="text-right" x-text="p.target != null ? fmtNumber(p.target) : '—'"></td>
+                          <td class="text-right text-danger" x-text="p.stop != null ? fmtNumber(p.stop) : '—'"></td>
+                          <td :class="cn('text-right', changeColor(p.unrealized_pct))" x-text="fmtPct(p.unrealized_pct)"></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </template>
+              </div>
+            </template>
+
+            <!-- Last live run -->
+            <template x-if="lastRun[b.id]">
+              <div class="text-xs space-y-1">
+                <template x-if="lastRun[b.id].blocked">
+                  <div class="text-warning" x-text="`Blocked: ${lastRun[b.id].blocked.replace(/_/g, ' ')}`"></div>
+                </template>
+                <template x-if="!lastRun[b.id].blocked && lastRun[b.id].actions.length === 0">
+                  <div class="text-muted">No actions this pass — no entries fired and no exits triggered.</div>
+                </template>
+                <template x-if="!lastRun[b.id].blocked && lastRun[b.id].actions.length > 0">
+                  <ul class="space-y-1">
+                    <template x-for="(a, i) in lastRun[b.id].actions" :key="i">
+                      <li class="font-mono">
+                        <span :class="actionCls(a)" x-text="a.action"></span> <span x-text="a.symbol"></span><template x-if="a.notional != null"><span class="text-muted" x-text="` · ${fmtUsd(a.notional)}`"></span></template><template x-if="a.llm"><span :class="cn('ml-1 text-[10px] uppercase px-1 py-0.5 rounded', llmCls(a.llm.decision))" x-text="`AI ${a.llm.decision}${a.llm.decision === 'DOWNSIZE' ? ` ×${a.llm.size_multiplier}` : ''}`"></span></template><template x-if="a.reason"><span class="text-muted" x-text="` — ${a.reason}`"></span></template>
+                        <template x-if="a.llm?.rationale">
+                          <div class="text-[11px] text-muted pl-4 not-italic" x-text="a.llm.rationale"></div>
+                        </template>
+                      </li>
+                    </template>
+                  </ul>
+                </template>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+    </template>
+  </div>
+
+  <!-- Long-term DCA backtest (investor) -->
+  <div class="card">
+    <div class="card-header flex items-center justify-between gap-2 flex-wrap">
+      <span class="inline-flex items-center gap-2"><i data-lucide="piggy-bank" class="size-4 text-success"></i> Long-term growth — DCA backtest</span>
+      <div class="flex items-center gap-2">
+        <label class="text-[11px] text-muted inline-flex items-center gap-1">
+          $/mo
+          <input type="number" min="100" step="100" :value="dcaMonthly"
+                 @input="dcaMonthly = tbClampInput($event, 100)"
+                 class="w-24 bg-surface2 border border-line rounded px-2 py-1 text-xs tabular">
+        </label>
+        <button @click="runDcaBacktest()" :disabled="dcaBusy"
+                class="rounded bg-accent text-bg font-medium px-3 py-1 text-xs inline-flex items-center gap-1 disabled:opacity-40">
+          <span :class="cn('inline-flex', dcaBusy && 'animate-spin')"><i data-lucide="activity" class="size-3"></i></span>
+          <span x-text="dcaBusy ? 'Running…' : 'Run backtest'"></span>
+        </button>
+      </div>
+    </div>
+
+    <template x-if="!dca">
+      <div class="px-4 py-4 text-sm text-muted">
+        Simulate investing a fixed amount every month into the diversified allocation
+        (dividends included), vs putting it all in the S&amp;P 500. Pick a monthly amount and run.
+      </div>
+    </template>
+    <template x-if="dca">
+      <div>
+        <div class="px-4 pt-3 text-xs text-muted">
+          <span x-text="`${dca.start} → ${dca.end} (${dca.years}y · ${dca.dca.n_contributions} monthly buys · ${fmtUsd(dca.monthly_contribution)}/mo, dividends reinvested)`"></span><template x-if="dca.excluded_no_history.length > 0"><span x-text="` · excluded (no history): ${dca.excluded_no_history.join(', ')}`"></span></template>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm mt-2">
+            <thead class="text-xs uppercase tracking-wide text-muted border-b border-line">
+              <tr>
+                <th class="text-left px-4 py-2">Strategy</th>
+                <th class="text-right px-4 py-2">Invested</th>
+                <th class="text-right px-4 py-2">Final value</th>
+                <th class="text-right px-4 py-2">Profit</th>
+                <th class="text-right px-4 py-2">Return/yr</th>
+                <th class="text-right px-4 py-2">Worst drop</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="row in TB_DCA_ROWS" :key="row.key">
+                <tr class="border-b border-line last:border-0">
+                  <td class="px-4 py-2" x-text="row.label"></td>
+                  <td class="px-4 py-2 text-right tabular" x-text="fmtUsd(dca[row.key].contributed)"></td>
+                  <td class="px-4 py-2 text-right tabular font-medium" x-text="fmtUsd(dca[row.key].final_value)"></td>
+                  <td :class="cn('px-4 py-2 text-right tabular', changeColor(dca[row.key].profit))" x-text="fmtUsd(dca[row.key].profit)"></td>
+                  <td class="px-4 py-2 text-right tabular" x-text="dca[row.key].irr_annual_pct != null ? fmtPct(dca[row.key].irr_annual_pct) : '—'"></td>
+                  <td class="px-4 py-2 text-right tabular text-danger" x-text="fmtPct(dca[row.key].max_drawdown_pct)"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+        <div class="px-4 py-3 text-xs text-muted">
+          The diversified mix typically earns a bit less than 100% stocks but with a noticeably
+          smaller worst-case drop — that&apos;s the diversification trade-off, not a bug. Past
+          performance doesn&apos;t predict the future.
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <p class="text-xs text-muted">
+    <span x-text="account?.paper === false
+      ? 'LIVE MONEY mode is enabled server-side — armed bots place real Alpaca orders. '
+      : 'Paper execution: armed bots place real-time orders against an Alpaca paper account (simulated money). '"></span>
+    Signals are model outputs and frequently wrong; backtested results are not a promise of future returns and this is not investment advice.
+  </p>
+</div>
+{% endblock %}
