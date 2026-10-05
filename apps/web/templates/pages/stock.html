@@ -1,0 +1,1377 @@
+{% extends "base.html" %}
+
+{#
+  Stock analysis page (port of app/stocks/[symbol]/page.tsx + ChartPanel, AIPanel,
+  OpinionPanel, SmartMoneyPanel, InsiderActivityPanel, ForecastCard,
+  ExplainabilityBreakdown, RecCard). The candlestick chart lives in
+  static/js/candlestick.js. Each panel is a nested Alpine component that reads
+  `lastPrice` / `detail` from the page component.
+#}
+
+{# Small stat tile (the `Stat` helper of the old panels). value/cls are JS expressions. #}
+{% macro stat(label, value, cls=None) -%}
+<div class="bg-surface2 rounded px-2 py-1.5">
+  <div class="text-[10px] uppercase tracking-wide text-muted">{{ label }}</div>
+  {% if cls %}
+  <div :class="cn('font-mono tabular text-sm mt-0.5', {{ cls }})" x-text="{{ value }}"></div>
+  {% else %}
+  <div class="font-mono tabular text-sm mt-0.5" x-text="{{ value }}"></div>
+  {% endif %}
+</div>
+{%- endmacro %}
+
+{# RecCard section block. #}
+{% macro section(title) -%}
+<div>
+  <div class="text-xs uppercase tracking-wide text-muted mb-1">{{ title }}</div>
+  {{ caller() }}
+</div>
+{%- endmacro %}
+
+{# Opinion timeframe / risk-mode selects (compact = header variant). #}
+{% macro timeframe_select(compact=False) -%}
+<select :value="timeframe" @change="setTimeframe($event.target.value)" :title="TIMEFRAME_BLURBS[timeframe]"
+        class="bg-surface2 border border-line rounded text-text {{ 'text-[11px] px-1.5 py-0.5' if compact else 'text-xs px-2 py-1.5' }}">
+  <option value="intraday">Intraday (day trade)</option>
+  <option value="swing">Swing (1–3 weeks)</option>
+  <option value="position">Position (1–3 months)</option>
+  <option value="longterm">Long-term (6m+)</option>
+</select>
+{%- endmacro %}
+
+{% macro risk_mode_select(compact=False) -%}
+<select :value="riskMode" @change="setRiskMode($event.target.value)" :title="RISK_MODE_BLURBS[riskMode]"
+        class="bg-surface2 border border-line rounded text-text {{ 'text-[11px] px-1.5 py-0.5' if compact else 'text-xs px-2 py-1.5' }}">
+  <option value="conservative">Conservative</option>
+  <option value="balanced">Balanced</option>
+  <option value="speculative">Speculative</option>
+</select>
+{%- endmacro %}
+
+{# Insider panel tab button. #}
+{% macro tab_button(id, icon, label) -%}
+<button @click="tab = '{{ id }}'"
+        :class="cn('pill border inline-flex items-center gap-1', tab === '{{ id }}' ? 'border-accent text-accent bg-accent/10' : 'border-line text-muted hover:text-text')">
+  <i data-lucide="{{ icon }}" class="size-3"></i> {{ label }}
+</button>
+{%- endmacro %}
+
+{# Insider panel signal score (+0.12, coloured). #}
+{% macro signal_badge(score) -%}
+<span :class="cn('text-xs tabular font-mono', ({{ score }}) > 0.15 ? 'text-emerald-300' : ({{ score }}) < -0.15 ? 'text-rose-300' : 'text-muted')"
+      x-text="`${({{ score }}) >= 0 ? '+' : ''}${({{ score }}).toFixed(2)}`"></span>
+{%- endmacro %}
+
+{% block head %}
+<script src="{{ url_for('static', path='js/candlestick.js') }}"></script>
+{% endblock %}
+
+{% block content %}
+<div x-data="stockPage()" class="p-6 space-y-6">
+  <header class="flex items-baseline justify-between flex-wrap gap-3">
+    <div>
+      <div class="text-xs text-muted" x-text="detail?.profile.exchange"></div>
+      <div class="flex items-baseline gap-3">
+        <h1 class="text-3xl font-semibold tracking-tight font-mono" x-text="detail?.profile.symbol ?? SYMBOL"></h1>
+        <span class="text-lg text-muted" x-text="detail?.profile.name"></span>
+      </div>
+    </div>
+    <template hidden x-if="detail">
+      <div class="text-right">
+        <div class="text-3xl font-mono tabular" x-text="fmtNumber(detail.quote.price)"></div>
+        <div :class="cn('text-sm tabular', changeColor(detail.quote.change_pct))"
+             x-text="`${fmtNumber(detail.quote.change)} (${fmtPct(detail.quote.change_pct)})`"></div>
+        <div class="text-xs text-muted" x-text="`${detail.quote.currency ?? ''} · ${detail.quote.market_state ?? '—'}`"></div>
+      </div>
+    </template>
+  </header>
+
+  <!-- The old server page failed as a whole when the detail call failed. -->
+  <template hidden x-if="detailErr">
+    <div class="card p-4 text-sm text-danger" x-text="`Couldn't load ${SYMBOL}: ${detailErr}`"></div>
+  </template>
+
+  <template hidden x-if="!detailErr">
+    <div class="space-y-6">
+
+      <!-- ===================== Analyst opinion (OpinionPanel) ===================== -->
+      <div x-data="opinionPanel()">
+        <template hidden x-if="!op">
+          <div class="card p-4">
+            <div class="flex items-center gap-3">
+              <i data-lucide="brain" class="size-5 text-accent"></i>
+              <div class="flex-1">
+                <div class="text-sm font-medium">Analyst opinion</div>
+                <div class="text-xs text-muted">Synthesizes every signal (forecast, technicals, fundamentals, sentiment, macro, price action, insider, institutional, political) into one structured opinion.</div>
+              </div>
+              {{ timeframe_select() }}
+              {{ risk_mode_select() }}
+              <button @click="load()" :disabled="loading" class="rounded bg-accent text-bg font-medium px-3 py-1.5 text-sm disabled:opacity-50"
+                      x-text="loading ? 'Synthesizing…' : 'Get opinion'"></button>
+            </div>
+            <div class="mt-2 text-[11px] text-muted leading-snug">
+              <span class="text-text/80" x-text="`${TIMEFRAME_LABELS[timeframe]}:`"></span> <span x-text="TIMEFRAME_BLURBS[timeframe]"></span>
+            </div>
+            <div class="mt-1 text-[11px] text-muted leading-snug" x-text="RISK_MODE_BLURBS[riskMode]"></div>
+            <template hidden x-if="err">
+              <div class="mt-2 text-xs text-danger break-all" x-text="err"></div>
+            </template>
+          </div>
+        </template>
+
+        <template hidden x-if="op">
+          <div :class="cn('card relative', loading && 'opacity-90')">
+            <!-- Visible "re-synthesizing" overlay so the dropdown refetch isn't silent -->
+            <div x-show="loading" x-cloak class="absolute inset-0 z-20 grid place-items-center bg-bg/40 backdrop-blur-[1px]">
+              <div class="inline-flex items-center gap-2 rounded-md bg-surface2 border border-line px-3 py-1.5 text-xs text-text shadow-lg">
+                <i data-lucide="brain" class="size-3.5 text-accent animate-pulse"></i>
+                Re-synthesizing for new mode…
+              </div>
+            </div>
+            <template hidden x-if="err">
+              <div class="px-4 py-2 bg-danger/10 border-b border-danger/30 text-xs text-danger" x-text="err"></div>
+            </template>
+            <div class="card-header">
+              <div class="flex items-center gap-2 flex-wrap">
+                <i data-lucide="brain" class="size-4 text-accent"></i>
+                <span class="text-text font-medium">Analyst opinion</span>
+                <span :class="cn('pill border', VERDICT_STYLE[op.verdict])" x-text="op.verdict.replace('_', ' ')"></span>
+                <span class="pill border border-line text-muted tabular text-[10px] uppercase"
+                      x-text="op.timeframe_label || TIMEFRAME_LABELS[op.timeframe || timeframe]"></span>
+                <span class="pill border border-line text-muted tabular text-[10px] uppercase" x-text="op.risk_mode || riskMode"></span>
+              </div>
+              <div class="flex items-center gap-2 flex-wrap">
+                {{ timeframe_select(compact=True) }}
+                {{ risk_mode_select(compact=True) }}
+                <div class="text-xs text-muted tabular"
+                     x-text="`score ${op.score >= 0 ? '+' : ''}${op.score.toFixed(2)} · conf ${(op.confidence * 100).toFixed(0)}% · ${op.time_horizon}`"></div>
+              </div>
+            </div>
+
+            <div class="px-4 py-3 space-y-3 text-sm">
+              <p class="text-text leading-relaxed" x-text="op.thesis"></p>
+
+              <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                {{ stat("Position size", "`${op.suggested_position_pct}%`") }}
+                {{ stat("Stop", "levelText(op.stop, stopMove)", "stopMove != null ? 'text-danger' : ''") }}
+                {{ stat("Target 1", "levelText(op.target_1, move1)", "move1 != null && move1 > 0 ? 'text-success' : move1 != null && move1 < 0 ? 'text-danger' : ''") }}
+                {{ stat("Target 2", "levelText(op.target_2, move2)", "move2 != null && move2 > 0 ? 'text-success' : move2 != null && move2 < 0 ? 'text-danger' : ''") }}
+              </div>
+
+              <template hidden x-if="op.entry_zone">
+                <div class="text-xs text-muted">
+                  <span x-text="`Entry zone (${op.entry_zone.type.replace('_', ' ')}):`"></span>
+                  <span class="font-mono tabular text-text" x-text="`${fmtNumber(op.entry_zone.lower)} – ${fmtNumber(op.entry_zone.upper)}`"></span>
+                </div>
+              </template>
+
+              <template hidden x-if="op.entry_review">
+                <div :class="cn('rounded border p-2.5 space-y-1', entryStyle.cls)">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="text-[10px] uppercase tracking-wide flex items-center gap-1 opacity-80">
+                      <i data-lucide="crosshair" class="size-3"></i> Entry review
+                    </span>
+                    <span class="text-sm font-medium" x-text="entryStyle.label"></span>
+                    <template hidden x-if="op.entry_review.timing">
+                      <span class="text-xs opacity-80" x-text="`· ${op.entry_review.timing}`"></span>
+                    </template>
+                    <template hidden x-if="op.entry_review.confidence != null">
+                      <span class="text-[10px] opacity-60 ml-auto" x-text="`conf ${(op.entry_review.confidence * 100).toFixed(0)}%`"></span>
+                    </template>
+                  </div>
+                  <template hidden x-if="op.entry_review.rationale">
+                    <p class="text-xs leading-snug opacity-90" x-text="op.entry_review.rationale"></p>
+                  </template>
+                  <template hidden x-if="op.entry_review.flags && op.entry_review.flags.length > 0">
+                    <ul class="text-[11px] space-y-0.5 opacity-80">
+                      <template hidden x-for="(f, i) in op.entry_review.flags" :key="i">
+                        <li x-text="`⚠ ${f}`"></li>
+                      </template>
+                    </ul>
+                  </template>
+                </div>
+              </template>
+
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <div class="text-[10px] uppercase tracking-wide mb-1 text-emerald-300">Bull case</div>
+                  <div x-show="op.bull_case.length === 0" class="text-xs text-muted">—</div>
+                  <ul x-show="op.bull_case.length > 0" class="space-y-1 text-xs text-muted">
+                    <template hidden x-for="(s, i) in op.bull_case" :key="i"><li x-text="`· ${s}`"></li></template>
+                  </ul>
+                </div>
+                <div>
+                  <div class="text-[10px] uppercase tracking-wide mb-1 text-rose-300">Bear case</div>
+                  <div x-show="op.bear_case.length === 0" class="text-xs text-muted">—</div>
+                  <ul x-show="op.bear_case.length > 0" class="space-y-1 text-xs text-muted">
+                    <template hidden x-for="(s, i) in op.bear_case" :key="i"><li x-text="`· ${s}`"></li></template>
+                  </ul>
+                </div>
+              </div>
+
+              <template hidden x-if="op.key_risks.length > 0">
+                <div>
+                  <div class="text-[10px] uppercase tracking-wide text-muted mb-1 flex items-center gap-1">
+                    <i data-lucide="shield-alert" class="size-3"></i> Key risks
+                  </div>
+                  <ul class="text-xs text-muted space-y-0.5">
+                    <template hidden x-for="(r, i) in op.key_risks" :key="i"><li x-text="`· ${r}`"></li></template>
+                  </ul>
+                </div>
+              </template>
+
+              <button @click="expanded = !expanded" class="text-xs text-muted hover:text-text flex items-center gap-1">
+                <span x-show="expanded" class="inline-flex"><i data-lucide="chevron-up" class="size-3"></i></span>
+                <span x-show="!expanded" class="inline-flex"><i data-lucide="chevron-down" class="size-3"></i></span>
+                <span x-text="`${expanded ? 'Hide' : 'Show'} signal summary`"></span>
+              </button>
+
+              <template hidden x-if="expanded">
+                <div class="grid grid-cols-2 gap-1 text-[11px] bg-surface2 rounded p-2">
+                  <template hidden x-for="e in signalEntries" :key="e.k">
+                    <div class="flex items-center justify-between">
+                      <span class="text-muted" x-text="e.k.replace(/_/g, ' ')"></span>
+                      <span class="font-mono tabular text-text" x-text="String(e.v)"></span>
+                    </div>
+                  </template>
+                </div>
+              </template>
+
+              <div class="text-[10px] text-muted">
+                Generated by: <span class="font-mono" x-text="op.generator"></span> · <span x-text="new Date(op.as_of).toLocaleString()"></span>
+              </div>
+            </div>
+
+            <div class="px-4 pb-3 flex gap-2">
+              <button @click="load()" class="text-xs pill border border-line text-muted hover:text-text">
+                Refresh
+              </button>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <div class="grid grid-cols-1 xl:grid-cols-12 gap-6">
+        <div class="xl:col-span-8 space-y-6">
+
+          <!-- ===================== Chart (ChartPanel + CandlestickChart) ===================== -->
+          <div x-data="chartPanel()" class="card">
+            <div class="card-header flex flex-wrap gap-2">
+              <div class="flex rounded-md overflow-hidden border border-line">
+                <template hidden x-for="t in TIMEFRAMES" :key="t.id">
+                  <button @click="selectTf(t.id)"
+                          :class="cn('px-3 py-1 text-xs hover:bg-surface2', tfId === t.id ? 'bg-surface2 text-text' : 'text-muted')"
+                          x-text="t.id"></button>
+                </template>
+              </div>
+              <button @click="toggleSmc()"
+                      :class="cn('px-2 py-1 text-xs rounded border', showSmc ? 'border-accent text-accent bg-accent/10' : 'border-line text-muted hover:text-text')"
+                      title="Toggle Smart Money overlays (FVGs, order blocks, BOS/CHOCH)">
+                SMC
+              </button>
+              <button @click="toggleRuler()"
+                      :class="cn('px-2 py-1 text-xs rounded border', rulerMode ? 'border-accent text-accent bg-accent/10' : 'border-line text-muted hover:text-text')"
+                      title="Measurement ruler — click two points on the chart to see % change, $ change, and bars between them">
+                📏 Ruler
+              </button>
+              <div class="ml-auto flex flex-wrap gap-1">
+                <template hidden x-for="o in INDICATOR_OPTIONS" :key="o.id">
+                  <button @click="toggleIndicator(o.id)"
+                          :class="cn('px-2 py-1 text-xs rounded border', activeIndicators.includes(o.id) ? 'border-accent text-accent' : 'border-line text-muted hover:text-text')"
+                          x-text="o.label"></button>
+                </template>
+              </div>
+            </div>
+            <div class="relative">
+              <div x-show="loading" class="absolute inset-0 grid place-items-center text-xs text-muted z-10">loading…</div>
+              <!-- Live tick pill: always shown, colour-coded by connection state -->
+              <div class="absolute top-2 right-2 z-10 flex items-center gap-1.5 rounded-md bg-surface2/80 px-2 py-1 text-xs text-text backdrop-blur font-mono tabular">
+                <span :class="cn('h-2 w-2 rounded-full', liveTick?.price ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500')"></span>
+                <span x-text="liveTick?.price ? `live $${liveTick.price.toFixed(2)}` : 'waiting…'"></span>
+              </div>
+              <div x-show="!loading && nBars === 0" x-cloak class="grid place-items-center gap-1 py-24 text-center">
+                <div class="text-sm text-muted">No data available</div>
+                <div class="text-xs text-muted/70"
+                     x-text="error
+                       ? `Couldn't load price history — the market-data provider may be unavailable or rate-limited. Try another timeframe or check back shortly.`
+                       : 'No price history for this timeframe.'"></div>
+              </div>
+              <!-- The chart stays in the DOM (hidden on the empty state) so it is created once. -->
+              <div x-show="loading || nBars > 0">
+                <div x-ref="chart"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ===================== Key statistics ===================== -->
+          <template hidden x-if="detail">
+            <div class="card">
+              <div class="card-header">Key statistics</div>
+              <div class="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-3 xl:grid-cols-4 gap-px bg-line">
+                <template hidden x-for="item in keyStats" :key="item[0]">
+                  <div class="bg-surface px-4 py-3">
+                    <div class="text-xs text-muted" x-text="item[0]"></div>
+                    <div class="font-mono tabular" x-text="item[1]"></div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+
+          <template hidden x-if="detail?.profile.description">
+            <div class="card">
+              <div class="card-header">About</div>
+              <p class="px-4 py-3 text-sm text-muted" x-text="detail.profile.description"></p>
+            </div>
+          </template>
+        </div>
+
+        <div class="xl:col-span-4 space-y-6">
+
+          <!-- ===================== Smart Money (SmartMoneyPanel) ===================== -->
+          <div x-data="smartMoneyPanel()">
+            <template hidden x-if="err">
+              <div class="card p-4 text-sm text-danger" x-text="err"></div>
+            </template>
+            <template hidden x-if="!err && !data">
+              <div class="card p-4 text-sm text-muted">Analyzing structure…</div>
+            </template>
+            <template hidden x-if="!err && data && !data.ok">
+              <div class="card p-4 text-sm text-muted" x-text="data.error ?? 'Insufficient data.'"></div>
+            </template>
+            <template hidden x-if="!err && data && data.ok">
+              <div class="card">
+                <div class="card-header">
+                  <div class="flex items-center gap-2">
+                    <i data-lucide="activity" class="size-4 text-accent"></i>
+                    <span class="text-text font-medium">Smart Money</span>
+                    <span x-show="trend === 'up'" class="pill border border-emerald-500/40 text-emerald-300 bg-emerald-500/10 inline-flex items-center gap-1"><i data-lucide="trending-up" class="size-3"></i> uptrend</span>
+                    <span x-show="trend === 'down'" class="pill border border-rose-500/40 text-rose-300 bg-rose-500/10 inline-flex items-center gap-1"><i data-lucide="trending-down" class="size-3"></i> downtrend</span>
+                    <span x-show="trend !== 'up' && trend !== 'down'" class="pill border border-line text-muted">range</span>
+                  </div>
+                  <span :class="cn('pill border tabular text-xs', confluenceCls(data.confluence.score))"
+                        x-text="`${data.confluence.label.replace('_', ' ')} ${data.confluence.score >= 0 ? '+' : ''}${data.confluence.score.toFixed(2)}`"></span>
+                </div>
+
+                <div class="px-4 py-3 space-y-3 text-sm">
+                  <div class="space-y-1">
+                    <template hidden x-for="e in componentEntries" :key="e.k">
+                      <div class="flex items-center gap-2 text-[11px]">
+                        <span class="text-muted w-32 truncate" x-text="e.k.replace(/_/g, ' ')"></span>
+                        <div class="flex-1 h-1.5 bg-surface2 rounded relative overflow-hidden">
+                          <div class="absolute top-0 bottom-0 left-1/2 w-px bg-line"></div>
+                          <div :class="cn('absolute top-0 bottom-0', e.v >= 0 ? 'left-1/2 bg-accent/70' : 'right-1/2 bg-danger/70')"
+                               :style="`width: ${Math.min(50, Math.abs(e.v) * 50)}%`"></div>
+                        </div>
+                        <span :class="cn('font-mono tabular w-10 text-right', e.v >= 0 ? 'text-accent' : 'text-danger')"
+                              x-text="`${e.v >= 0 ? '+' : ''}${e.v.toFixed(2)}`"></span>
+                      </div>
+                    </template>
+                  </div>
+
+                  <template hidden x-if="data.confluence.drivers.length > 0">
+                    <ul class="text-xs text-muted space-y-0.5">
+                      <template hidden x-for="(d, i) in data.confluence.drivers" :key="i"><li x-text="`· ${d}`"></li></template>
+                    </ul>
+                  </template>
+
+                  <div class="grid grid-cols-2 gap-2 text-xs">
+                    {{ stat("Active FVGs", "String(activeFvgs.length)") }}
+                    {{ stat("Unmitigated OBs", "String(activeObs.length)") }}
+                    {{ stat("Structure events", "String((data.structure_events ?? []).length)") }}
+                    {{ stat("ATR", "fmtNumber(data.atr ?? 0)") }}
+                  </div>
+
+                  <template hidden x-if="recentEvents.length > 0">
+                    <div>
+                      <div class="text-xs uppercase tracking-wide text-muted mb-1">Recent structure</div>
+                      <ul class="space-y-1">
+                        <template hidden x-for="(e, i) in recentEvents" :key="i">
+                          <li class="flex items-center gap-2 text-xs">
+                            <span :class="cn('pill border tabular', e.direction === 'bullish'
+                                    ? 'border-emerald-500/40 text-emerald-300 bg-emerald-500/10'
+                                    : 'border-rose-500/40 text-rose-300 bg-rose-500/10')"
+                                  x-text="`${e.kind} ${e.direction === 'bullish' ? '↑' : '↓'}`"></span>
+                            <span class="text-muted" x-text="`broke ${fmtNumber(e.broken_level)}`"></span>
+                            <span class="text-muted ml-auto" x-text="new Date(e.ts).toLocaleDateString()"></span>
+                          </li>
+                        </template>
+                      </ul>
+                    </div>
+                  </template>
+
+                  <template hidden x-if="recentSweeps.length > 0">
+                    <div>
+                      <div class="text-xs uppercase tracking-wide text-muted mb-1">Liquidity sweeps</div>
+                      <ul class="space-y-1">
+                        <template hidden x-for="(s, i) in recentSweeps" :key="i">
+                          <li class="flex items-center gap-2 text-xs">
+                            <span :class="cn('inline-flex', s.direction === 'bullish' ? 'text-emerald-300' : 'text-rose-300')"><i data-lucide="alert-triangle" class="size-3"></i></span>
+                            <span class="text-muted" x-text="`${s.direction} sweep at ${fmtNumber(s.swept_level)} → reclaimed ${fmtNumber(s.reversal_close)}`"></span>
+                            <span class="text-muted ml-auto" x-text="new Date(s.ts).toLocaleDateString()"></span>
+                          </li>
+                        </template>
+                      </ul>
+                    </div>
+                  </template>
+
+                  <template hidden x-if="(data.zones ?? []).length > 0">
+                    <div>
+                      <div class="text-xs uppercase tracking-wide text-muted mb-1">Top zones</div>
+                      <div class="grid grid-cols-2 gap-2">
+                        <div>
+                          <div class="text-[10px] text-emerald-300 mb-1">Demand</div>
+                          <template hidden x-for="(z, i) in demand" :key="i">
+                            <div class="text-[11px] font-mono tabular text-muted">
+                              <span x-text="`${fmtNumber(z.lower)} – ${fmtNumber(z.upper)}`"></span> <span class="opacity-50" x-text="`×${z.strength}`"></span>
+                            </div>
+                          </template>
+                          <div x-show="demand.length === 0" class="text-[11px] text-muted">—</div>
+                        </div>
+                        <div>
+                          <div class="text-[10px] text-rose-300 mb-1">Supply</div>
+                          <template hidden x-for="(z, i) in supply" :key="i">
+                            <div class="text-[11px] font-mono tabular text-muted">
+                              <span x-text="`${fmtNumber(z.lower)} – ${fmtNumber(z.upper)}`"></span> <span class="opacity-50" x-text="`×${z.strength}`"></span>
+                            </div>
+                          </template>
+                          <div x-show="supply.length === 0" class="text-[11px] text-muted">—</div>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+
+                <div class="px-4 pb-3 text-[11px] text-muted">
+                  Deterministic SMC analysis. Confluence is a heuristic, not a guarantee.
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <!-- ===================== Insiders / 13F / Politicians (InsiderActivityPanel) ===================== -->
+          <div x-data="insiderPanel()" class="card">
+            <div class="card-header flex items-center gap-2">
+              <i data-lucide="shield-check" class="size-4 text-accent"></i>
+              <span class="text-text font-medium">Smart money</span>
+              <div class="ml-auto flex gap-1 text-xs">
+                {{ tab_button("insiders", "briefcase", "Insiders") }}
+                {{ tab_button("institutional", "landmark", "13F") }}
+                {{ tab_button("politicians", "users", "Politicians") }}
+              </div>
+            </div>
+
+            <!-- insiders tab -->
+            <template hidden x-if="tab === 'insiders' && !insider">
+              <div class="px-4 py-3 text-sm text-muted">Loading…</div>
+            </template>
+            <template hidden x-if="tab === 'insiders' && insider">
+              <div class="px-4 py-3 space-y-3 text-sm">
+                <div class="flex items-baseline justify-between">
+                  <p class="text-muted text-xs" x-text="insider.signal?.summary"></p>
+                  {{ signal_badge("insider.signal?.score ?? 0") }}
+                </div>
+                <div class="grid grid-cols-3 gap-2 text-xs">
+                  {{ stat("Buys (90d)", "String(insider.signal?.n_buys_90d ?? 0)", "''") }}
+                  {{ stat("Sells (90d)", "String(insider.signal?.n_sells_90d ?? 0)", "''") }}
+                  {{ stat("Net $ (90d)", "`$${fmtCompact(insider.signal?.net_value_90d ?? 0)}`", "changeColor(insider.signal?.net_value_90d ?? 0)") }}
+                </div>
+                <template hidden x-if="(insider.transactions ?? []).length > 0">
+                  <ul class="space-y-1 max-h-72 overflow-auto">
+                    <template hidden x-for="(tx, i) in insider.transactions.slice(0, 12)" :key="i">
+                      <li class="flex items-center justify-between text-xs border-b border-line/40 last:border-0 pb-1">
+                        <div>
+                          <div class="text-text" x-text="tx['Insider'] ?? tx['Name'] ?? '—'"></div>
+                          <div class="text-muted" x-text="tx['Position'] ?? tx['Title'] ?? ''"></div>
+                        </div>
+                        <div class="text-right">
+                          <div :class="cn('tabular font-mono', txColor(tx))" x-text="tx['Transaction'] ?? tx['Action']"></div>
+                          <div class="text-muted" x-text="tx['Start Date'] ?? tx['Date'] ?? ''"></div>
+                          <div class="text-muted tabular font-mono" x-text="tx['Shares'] ? `${fmtCompact(tx['Shares'])} sh` : ''"></div>
+                        </div>
+                      </li>
+                    </template>
+                  </ul>
+                </template>
+                <template hidden x-if="(insider.transactions ?? []).length === 0">
+                  <div class="text-xs text-muted">No recent insider transactions disclosed.</div>
+                </template>
+              </div>
+            </template>
+
+            <!-- institutional (13F) tab -->
+            <template hidden x-if="tab === 'institutional' && !inst">
+              <div class="px-4 py-3 text-sm text-muted">Loading…</div>
+            </template>
+            <template hidden x-if="tab === 'institutional' && inst">
+              <div class="px-4 py-3 space-y-3 text-sm">
+                <div class="flex items-baseline justify-between">
+                  <p class="text-muted text-xs" x-text="inst.signal?.summary"></p>
+                  {{ signal_badge("inst.signal?.score ?? 0") }}
+                </div>
+
+                <template hidden x-if="(inst.famous_holders ?? []).length > 0">
+                  <div>
+                    <div class="text-[10px] uppercase tracking-wide text-muted mb-1">Notable investors hold this</div>
+                    <ul class="space-y-1">
+                      <template hidden x-for="(f, i) in inst.famous_holders" :key="i">
+                        <li class="flex items-center justify-between text-xs">
+                          <span class="text-text" x-text="f.investor"></span>
+                          <span class="text-muted">
+                            <span x-text="f.weight_pct ? `${f.weight_pct}% of fund` : ''"></span>
+                            <span x-show="f.change" class="ml-1 italic" x-text="`(${f.change})`"></span>
+                          </span>
+                        </li>
+                      </template>
+                    </ul>
+                  </div>
+                </template>
+
+                <template hidden x-if="(inst.institutional_holders ?? []).length > 0">
+                  <div>
+                    <div class="text-[10px] uppercase tracking-wide text-muted mb-1">Top institutional holders</div>
+                    <table class="w-full text-xs">
+                      <thead class="text-muted">
+                        <tr><th class="text-left py-1">Holder</th><th class="text-right">% Out</th><th class="text-right">Shares</th></tr>
+                      </thead>
+                      <tbody>
+                        <template hidden x-for="(h, i) in inst.institutional_holders.slice(0, 8)" :key="i">
+                          <tr class="border-b border-line/40 last:border-0">
+                            <td class="py-1 text-text truncate max-w-[16ch]" x-text="h['Holder'] ?? h['holder']"></td>
+                            <td class="text-right tabular font-mono"
+                                x-text="h['pctHeld'] !== undefined ? `${(parseFloat(h['pctHeld']) * 100).toFixed(2)}%` : (h['% Out'] ?? '—')"></td>
+                            <td class="text-right tabular font-mono" x-text="h['Shares'] ? fmtCompact(parseFloat(h['Shares'])) : '—'"></td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
+                </template>
+                <template hidden x-if="(inst.institutional_holders ?? []).length === 0 && (inst.famous_holders ?? []).length === 0">
+                  <div class="text-xs text-muted">No institutional data available.</div>
+                </template>
+              </div>
+            </template>
+
+            <!-- politicians tab -->
+            <template hidden x-if="tab === 'politicians' && !pol">
+              <div class="px-4 py-3 text-sm text-muted">Loading…</div>
+            </template>
+            <template hidden x-if="tab === 'politicians' && pol">
+              <div class="px-4 py-3 space-y-3 text-sm">
+                <div class="flex items-baseline justify-between">
+                  <p class="text-muted text-xs" x-text="pol.signal?.summary"></p>
+                  {{ signal_badge("pol.signal?.score ?? 0") }}
+                </div>
+                <div class="text-[10px] text-muted">
+                  Source: <span x-text="polSource(pol.source)"></span> —
+                  disclosed up to 45 days after the trade. <a href="/congress" class="underline hover:text-accent">Congress tracker →</a>
+                </div>
+                <template hidden x-if="(pol.trades ?? []).length === 0">
+                  <div class="text-xs text-muted">No disclosed political trades.</div>
+                </template>
+                <ul class="space-y-2 max-h-80 overflow-auto">
+                  <template hidden x-for="(t, i) in (pol.trades ?? [])" :key="i">
+                    <li class="text-xs border-b border-line/40 last:border-0 pb-2">
+                      <div class="flex items-center justify-between">
+                        <span class="text-text" x-text="t.politician"></span>
+                        <span :class="cn('pill border tabular', t.side === 'buy' || t.side === 'purchase'
+                                ? 'border-emerald-500/40 text-emerald-300 bg-emerald-500/5'
+                                : 'border-rose-500/40 text-rose-300 bg-rose-500/5')"
+                              x-text="`${t.side?.replace('_', ' ') ?? ''}${t.asset_type === 'OP' ? ' · options' : ''}`"></span>
+                      </div>
+                      <div class="text-muted" x-text="`${t.chamber ?? ''} · ${t.party ?? ''} · ${t.amount_range ?? ''}${t.demo ? ' · demo' : ''}`"></div>
+                      <div class="text-muted">
+                        <span x-text="`traded ${t.traded_at ?? ''} · disclosed ${t.disclosed_at ?? ''}`"></span><template hidden x-if="t.source_url"><span> · <a :href="t.source_url" target="_blank" rel="noreferrer" class="underline hover:text-accent">filing</a></span></template>
+                      </div>
+                      <template hidden x-if="t.note">
+                        <div class="text-muted italic" x-text="t.note"></div>
+                      </template>
+                    </li>
+                  </template>
+                </ul>
+              </div>
+            </template>
+          </div>
+
+          <!-- ===================== Forecast + recommendation (AIPanel) ===================== -->
+          <div x-data="aiPanel()">
+            <template hidden x-if="state === 'loading'">
+              <div class="card p-6 text-sm text-muted">Training &amp; forecasting (first call can take a moment)…</div>
+            </template>
+            <!-- e.g. the API returned {"detail":"no data"}: graceful empty state instead of a raw error -->
+            <template hidden x-if="state === 'error'">
+              <div class="card p-6 text-center space-y-1">
+                <div class="text-sm text-muted">No data available</div>
+                <div class="text-xs text-muted/70">
+                  Couldn&apos;t generate a forecast right now — market data may be unavailable or rate-limited.
+                </div>
+              </div>
+            </template>
+            <template hidden x-if="state === 'empty'">
+              <div class="card p-6 text-sm text-muted text-center">No data available</div>
+            </template>
+            <template hidden x-if="state === 'ok'">
+              <div class="space-y-6">
+
+                <!-- RecCard -->
+                <template hidden x-if="rec">
+                  <div class="card">
+                    <div class="card-header">
+                      <div class="flex items-center gap-3">
+                        <span :class="cn('pill border', REC_LABEL_STYLE[rec.label])" x-text="rec.label.replace('_', ' ')"></span>
+                        <span class="text-xs text-muted tabular"
+                              x-text="`score ${rec.score >= 0 ? '+' : ''}${rec.score.toFixed(2)} · conf ${(rec.confidence * 100).toFixed(0)}%`"></span>
+                      </div>
+                      <span class="text-xs text-muted" x-text="rec.symbol"></span>
+                    </div>
+
+                    <div class="px-4 py-3 grid gap-3 text-sm">
+                      {% call section("Technical") %}
+                        <p class="text-muted" x-text="r.technical?.summary"></p>
+                        <template hidden x-if="r.technical?.bullish?.length > 0">
+                          <ul class="ml-4 list-disc text-success/90">
+                            <template hidden x-for="(s, i) in r.technical.bullish" :key="i"><li x-text="s"></li></template>
+                          </ul>
+                        </template>
+                        <template hidden x-if="r.technical?.bearish?.length > 0">
+                          <ul class="ml-4 list-disc text-danger/90">
+                            <template hidden x-for="(s, i) in r.technical.bearish" :key="i"><li x-text="s"></li></template>
+                          </ul>
+                        </template>
+                      {% endcall %}
+                      {% call section("Fundamentals") %}<p class="text-muted" x-text="r.fundamental?.summary"></p>{% endcall %}
+                      {% call section("Sentiment") %}<p class="text-muted" x-text="r.sentiment?.summary"></p>{% endcall %}
+                      <template hidden x-if="r.price_action && r.price_action.score !== undefined">
+                        {% call section("Price action (SMC)") %}
+                          <p class="text-muted" x-text="r.price_action.summary"></p>
+                          <template hidden x-if="Array.isArray(r.price_action.drivers) && r.price_action.drivers.length > 0">
+                            <ul class="ml-4 list-disc text-muted">
+                              <template hidden x-for="(d, i) in r.price_action.drivers.slice(0, 4)" :key="i"><li x-text="d"></li></template>
+                            </ul>
+                          </template>
+                        {% endcall %}
+                      </template>
+                      {% call section("Macro context") %}<p class="text-muted" x-text="r.macro?.summary"></p>{% endcall %}
+                      {% call section("Risk") %}
+                        <div class="grid grid-cols-2 gap-2 text-xs text-muted tabular">
+                          <div>ATR <span class="text-text" x-text="`${r.risk?.atr_pct_of_price ?? ''}%`"></span></div>
+                          <div>90d MDD <span class="text-text" x-text="`${r.risk?.max_drawdown_90d_pct ?? ''}%`"></span></div>
+                          <div>Suggested stop <span class="text-text" x-text="`$${r.risk?.suggested_stop ?? ''}`"></span></div>
+                          <div>Regime <span class="text-text" x-text="r.risk?.regime"></span></div>
+                        </div>
+                      {% endcall %}
+                    </div>
+                    <div class="px-4 pb-3 text-[11px] text-muted">
+                      Informational only. Not investment advice.
+                    </div>
+                  </div>
+                </template>
+
+                <!-- ForecastCard per horizon -->
+                <template hidden x-for="f in forecasts" :key="f.horizon">
+                  <div class="card" x-data="{ get v() { return forecastView(f, lastPrice) } }">
+                    <div class="card-header">
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <span class="text-text font-medium" x-text="`Forecast · ${f.horizon}`"></span>
+                        <span :class="cn('pill border tabular', v.lowConfidence ? 'bg-amber-500/10 border-amber-500/40 text-amber-300' : 'bg-surface2 border-line text-muted')"
+                              x-text="`confidence ${(f.confidence * 100).toFixed(0)}%`"></span>
+                        <template hidden x-if="v.fresh">
+                          <span :class="cn('pill border tabular text-[10px]', v.fresh.cls)" title="Model freshness (red > 7d)" x-text="v.fresh.text"></span>
+                        </template>
+                        <template hidden x-if="v.noEdge">
+                          <span class="pill border border-rose-500/40 text-rose-300 bg-rose-500/10 tabular text-[10px]"
+                                title="Forecast band is wider than 50% of price — no actionable signal">
+                            no edge
+                          </span>
+                        </template>
+                      </div>
+                      <div class="text-xs text-muted" x-text="v.mix"></div>
+                    </div>
+                    <template hidden x-if="v.lowConfidence || v.noEdge">
+                      <div class="px-4 pt-2 pb-1 text-[11px] text-amber-300/90 leading-snug"
+                           x-text="v.noEdge
+                             ? `Model has no edge on this name (uncertainty band ±${(v.bandPct / 2).toFixed(0)}%). Treat the point estimate as noise; use the interval for risk framing only.`
+                             : `Low model confidence (${(f.confidence * 100).toFixed(0)}%). Point estimate is informational, not actionable.`"></div>
+                    </template>
+                    <div class="px-4 py-3 grid grid-cols-2 gap-4">
+                      <div>
+                        <div class="text-xs text-muted">Point estimate</div>
+                        <div :class="cn('text-2xl font-mono tabular', (v.lowConfidence || v.noEdge) && 'text-muted line-through decoration-muted/40')"
+                             x-text="fmtNumber(f.point)"></div>
+                        <div :class="cn('text-sm tabular', (v.lowConfidence || v.noEdge) ? 'text-muted' : changeColor(v.movePct))"
+                             x-text="`${fmtPct(v.movePct)} vs. ${fmtNumber(lastPrice)}`"></div>
+                      </div>
+                      <div>
+                        <div class="text-xs text-muted">P(direction up)</div>
+                        <div class="text-2xl font-mono tabular">
+                          <span x-text="`${v.upProb.toFixed(0)}%`"></span><template hidden x-if="v.coinFlip"><span class="ml-2 text-xs text-muted">≈ coin flip</span></template>
+                        </div>
+                        <div class="text-sm text-muted" x-text="`vol ±${f.expected_volatility_pct.toFixed(1)}%`"></div>
+                      </div>
+                    </div>
+                    <div class="px-4 pb-2">
+                      <!-- ConfidenceBar: p25-p75 band, point (dot) and last price (tick) on the p10-p90 range -->
+                      <div class="relative h-2 bg-surface2 rounded">
+                        <div class="absolute inset-y-0 bg-accent/30 rounded" :style="`left: ${v.bar.left}%; right: ${v.bar.right}%`"></div>
+                        <div class="absolute -top-1 size-4 -translate-x-1/2 rounded-full bg-accent" :style="`left: ${v.bar.point}%`"></div>
+                        <div class="absolute -top-0.5 h-3 w-px bg-muted" :style="`left: ${v.bar.last}%`" title="last price"></div>
+                      </div>
+                    </div>
+                    <div class="px-4 pb-3 grid grid-cols-2 gap-2 text-xs text-muted">
+                      <div>p10 <span class="tabular text-text" x-text="fmtNumber(f.intervals.p10)"></span></div>
+                      <div>p90 <span class="tabular text-text" x-text="fmtNumber(f.intervals.p90)"></span></div>
+                      <div>p25 <span class="tabular text-text" x-text="fmtNumber(f.intervals.p25)"></span></div>
+                      <div>p75 <span class="tabular text-text" x-text="fmtNumber(f.intervals.p75)"></span></div>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- ExplainabilityBreakdown (first horizon) -->
+                <template hidden x-if="forecasts[0]">
+                  <div class="card">
+                    <div class="card-header">
+                      <span class="text-text font-medium">Why this forecast</span>
+                      <span class="text-xs text-muted">SHAP attribution</span>
+                    </div>
+                    <div class="px-4 py-3">
+                      <div class="flex h-3 rounded overflow-hidden">
+                        <template hidden x-for="e in contribEntries" :key="e.k">
+                          <div :title="`${EXPL_LABELS[e.k] ?? e.k} ${(e.v * 100).toFixed(0)}%`"
+                               :class="cn('h-full', EXPL_COLORS[e.k] ?? 'bg-muted')"
+                               :style="`width: ${e.v * 100}%`"></div>
+                        </template>
+                      </div>
+                      <div class="mt-3 grid grid-cols-2 gap-2 text-xs">
+                        <template hidden x-for="e in contribEntries" :key="e.k">
+                          <div class="flex items-center gap-2">
+                            <span :class="cn('size-2 rounded-sm', EXPL_COLORS[e.k] ?? 'bg-muted')"></span>
+                            <span class="text-muted flex-1" x-text="EXPL_LABELS[e.k] ?? e.k"></span>
+                            <span class="font-mono tabular" x-text="`${(e.v * 100).toFixed(0)}%`"></span>
+                          </div>
+                        </template>
+                      </div>
+                    </div>
+                    <template hidden x-if="forecasts[0].drivers.length > 0">
+                      <div>
+                        <div class="px-4 pt-2 text-xs uppercase tracking-wide text-muted">Top drivers</div>
+                        <ul class="px-4 py-2 space-y-1 text-sm">
+                          <template hidden x-for="(d, i) in forecasts[0].drivers" :key="i">
+                            <li class="flex items-center justify-between">
+                              <span>
+                                <span :class="cn('mr-2', d.direction === 'up' ? 'text-success' : d.direction === 'down' ? 'text-danger' : 'text-muted')"
+                                      x-text="d.direction === 'up' ? '▲' : d.direction === 'down' ? '▼' : '·'"></span><span x-text="d.name"></span>
+                              </span>
+                              <span class="font-mono tabular text-muted" x-text="`${(d.weight * 100).toFixed(1)}%`"></span>
+                            </li>
+                          </template>
+                        </ul>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </div>
+  </template>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const SYMBOL = {{ symbol | tojson }};
+  const toSec = (ts) => Math.floor(new Date(ts).getTime() / 1000);
+
+  // ---------------------------------------------------------------- page
+
+  function stockPage() {
+    return {
+      detail: null,
+      detailErr: null,
+
+      // The old page was a server component: profile/quote/key stats arrived with the HTML.
+      async init() {
+        try {
+          this.detail = await api.detail(SYMBOL);
+        } catch (e) {
+          this.detailErr = errMsg(e);
+        }
+      },
+
+      get lastPrice() {
+        return this.detail?.quote?.price ?? null;
+      },
+
+      get keyStats() {
+        const s = this.detail?.key_stats;
+        if (!s) return [];
+        return [
+          ["Market Cap", fmtCompact(this.detail.profile.market_cap)],
+          ["P/E", fmtNumber(s.pe)],
+          ["Forward P/E", fmtNumber(s.forward_pe)],
+          ["EPS", fmtNumber(s.eps)],
+          ["Dividend yield", s.dividend_yield != null ? `${(s.dividend_yield * 100).toFixed(2)}%` : "—"],
+          ["Beta", fmtNumber(s.beta)],
+          ["52w high", fmtNumber(s.fifty_two_week_high)],
+          ["52w low", fmtNumber(s.fifty_two_week_low)],
+          ["Avg volume", fmtCompact(s.avg_volume)],
+        ];
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------- chart panel
+
+  // Seconds each interval covers: decides whether a tick updates the last bar or starts a new one.
+  const INTERVAL_SECS = {
+    "1m": 60, "2m": 120, "5m": 300, "15m": 900,
+    "30m": 1800, "60m": 3600, "1h": 3600, "90m": 5400,
+    "1d": 86400, "5d": 86400 * 5,
+    "1wk": 86400 * 7, "1mo": 86400 * 30, "3mo": 86400 * 90,
+  };
+
+  // Each preset loads MORE history than its visible window (`range` is what we pull);
+  // `visibleBars` is the initial window, the user can pan/zoom left into the buffer.
+  const TIMEFRAMES = [
+    { id: "1D", range: "1mo", interval: "5m", visibleBars: 78 },   // 1 trading day of 5m bars
+    { id: "1W", range: "3mo", interval: "30m", visibleBars: 65 },  // ~5 trading days of 30m bars
+    { id: "1M", range: "1y", interval: "1d", visibleBars: 21 },    // 1 month of daily bars
+    { id: "3M", range: "2y", interval: "1d", visibleBars: 63 },
+    { id: "6M", range: "3y", interval: "1d", visibleBars: 126 },
+    { id: "1Y", range: "5y", interval: "1d", visibleBars: 252 },
+    { id: "5Y", range: "10y", interval: "1wk", visibleBars: 260 },
+    { id: "Max", range: "max", interval: "1mo", visibleBars: 0 },  // 0 = fit all
+  ];
+
+  const INDICATOR_OPTIONS = [
+    { id: "sma_20", label: "SMA 20", color: "#5EEAD4" },
+    { id: "sma_50", label: "SMA 50", color: "#F59E0B" },
+    { id: "sma_200", label: "SMA 200", color: "#A78BFA" },
+    { id: "ema_12", label: "EMA 12", color: "#60A5FA" },
+    { id: "ema_26", label: "EMA 26", color: "#F472B6" },
+  ];
+
+  function chartPanel() {
+    // Bars and chart series data stay OUT of Alpine state (big arrays, handed to the chart).
+    let chartEl = null;
+    let bars = [];
+    let overlays = [];
+    let bands = [];
+    let markers = [];
+    let loadSeq = 0;
+    let refreshTimer = null;
+    let refreshSeq = 0;
+    let pollTimer = null;
+    let stopWs = null;
+    const cc = () => chartEl?._candleChart;
+
+    return {
+      tfId: "6M",
+      activeIndicators: ["sma_20", "sma_50"],
+      showSmc: true,
+      rulerMode: false,
+      loading: true,
+      error: null,
+      nBars: 0,
+      wsTick: null,
+      restTick: null,
+
+      get tf() {
+        return TIMEFRAMES.find((t) => t.id === this.tfId);
+      },
+
+      // Prefer whichever quote is newer: the WS tick (fast, intraday) or the REST
+      // quote (wins in pre/post-market, when the WS is quiet).
+      get liveTick() {
+        const ws = this.wsTick?.price ? this.wsTick : null;
+        const rest = this.restTick;
+        if (ws && rest) {
+          const wsMs = ws.ts ? new Date(ws.ts).getTime() : 0;
+          const rMs = rest.ts ? new Date(rest.ts).getTime() : 0;
+          return rMs > wsMs ? rest : ws;
+        }
+        return ws ?? rest;
+      },
+
+      init() {
+        this.$nextTick(() => {
+          chartEl = this.$refs.chart;
+          createCandlestickChart(chartEl, { height: 460 });
+          this.load();
+          this.startIntradayRefresh();
+        });
+
+        // REST quote fallback: the WS feed is silent in pre/post-market; the REST quote
+        // carries the extended-hours price, so poll it to keep the leading edge moving.
+        const poll = async () => {
+          try {
+            const d = await api.detail(SYMBOL);
+            if (d?.quote?.price) {
+              this.restTick = { price: d.quote.price, ts: d.quote.ts ?? new Date().toISOString() };
+              this.applyLiveTick();
+            }
+          } catch {
+            // keep the historical bars
+          }
+        };
+        poll();
+        pollTimer = setInterval(poll, 20_000);
+
+        // Live tick stream: updates the last candle's close/high/low in real time.
+        stopWs = liveQuotes([SYMBOL], (q) => {
+          if (q.symbol !== SYMBOL) return;
+          this.wsTick = { price: q.price, ts: q.ts ?? null };
+          this.applyLiveTick();
+        });
+      },
+
+      destroy() {
+        clearInterval(pollTimer);
+        clearInterval(refreshTimer);
+        stopWs?.();
+        cc()?.destroy();
+      },
+
+      // history + indicators (+ SMC) for the current timeframe. Failures and empty
+      // series give the inline empty state instead of breaking the page.
+      async load() {
+        const seq = ++loadSeq;
+        const tf = this.tf;
+        const active = [...this.activeIndicators];
+        const smc = this.showSmc;
+        this.loading = true;
+        this.error = null;
+        try {
+          const [h, i, pa] = await Promise.all([
+            api.history(SYMBOL, tf.interval, tf.range),
+            api.indicators(SYMBOL, active, tf.interval, tf.range).catch(() => null),
+            smc ? api.priceAction(SYMBOL, tf.interval, tf.range).catch(() => null) : Promise.resolve(null),
+          ]);
+          if (seq !== loadSeq) return;
+          if (!h?.bars || h.bars.length === 0) {
+            bars = []; overlays = []; bands = []; markers = [];
+            this.pushAll(tf);
+            return;
+          }
+          bars = h.bars;
+          overlays = i ? active.flatMap((id) => {
+            const opt = INDICATOR_OPTIONS.find((o) => o.id === id);
+            const series = opt && i.indicators[id];
+            if (!series) return [];
+            return [{
+              name: opt.label,
+              color: opt.color,
+              data: i.ts.map((t, idx) => ({ time: toSec(t), value: series[idx] })),
+            }];
+          }) : [];
+          if (pa?.ok) {
+            const lastBarSec = toSec(bars[bars.length - 1].ts);
+            // bands: unfilled FVGs + unmitigated OBs (max 6 each to keep the chart readable)
+            bands = [];
+            (pa.fvgs ?? []).filter((f) => !f.filled).slice(-6).forEach((f) => {
+              bands.push({
+                startTime: toSec(f.ts), endTime: lastBarSec, upper: f.upper, lower: f.lower,
+                color: f.direction === "bullish" ? "rgba(34,197,94,0.5)" : "rgba(239,68,68,0.5)",
+              });
+            });
+            (pa.order_blocks ?? []).filter((o) => !o.mitigated).slice(-6).forEach((o) => {
+              bands.push({
+                startTime: toSec(o.ts), endTime: lastBarSec, upper: o.upper, lower: o.lower,
+                color: o.direction === "bullish" ? "rgba(94,234,212,0.5)" : "rgba(244,114,182,0.5)",
+              });
+            });
+            // markers: last 8 BOS/CHOCH events + recent liquidity sweeps
+            markers = [];
+            (pa.structure_events ?? []).slice(-8).forEach((e) => {
+              markers.push({
+                time: toSec(e.ts),
+                position: e.direction === "bullish" ? "belowBar" : "aboveBar",
+                color: e.direction === "bullish" ? "#22C55E" : "#EF4444",
+                shape: e.direction === "bullish" ? "arrowUp" : "arrowDown",
+                text: e.kind,
+              });
+            });
+            (pa.liquidity_sweeps ?? []).slice(-4).forEach((s) => {
+              markers.push({
+                time: toSec(s.ts),
+                position: s.direction === "bullish" ? "belowBar" : "aboveBar",
+                color: s.direction === "bullish" ? "#5EEAD4" : "#F472B6",
+                shape: "circle",
+                text: "sweep",
+              });
+            });
+          } else {
+            bands = []; markers = [];
+          }
+          this.pushAll(tf);
+        } catch (e) {
+          if (seq !== loadSeq) return;
+          this.error = errMsg(e);
+          bars = []; overlays = []; bands = []; markers = [];
+          this.pushAll(tf);
+        } finally {
+          if (seq === loadSeq) this.loading = false;
+        }
+      },
+
+      pushCandles() {
+        const chart = cc();
+        if (!chart) return;
+        chart.setCandles(bars.map((b) => ({ time: toSec(b.ts), open: b.open, high: b.high, low: b.low, close: b.close })));
+        chart.setVolume(bars.map((b) => ({
+          time: toSec(b.ts),
+          value: b.volume,
+          color: b.close >= b.open ? "rgba(34,197,94,0.35)" : "rgba(239,68,68,0.35)",
+        })));
+        this.nBars = bars.length;
+      },
+
+      pushOverlays() {
+        cc()?.setOverlays(overlays, this.showSmc ? bands : [], this.showSmc ? markers : []);
+      },
+
+      pushAll(tf) {
+        this.pushCandles();
+        this.pushOverlays();
+        cc()?.fitIfPending(tf.visibleBars || undefined);
+      },
+
+      // Keep INTRADAY charts current: silently refetch the bars every minute (no
+      // spinner, keep the existing series on failure).
+      startIntradayRefresh() {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+        const token = ++refreshSeq;
+        const tf = this.tf;
+        if ((INTERVAL_SECS[tf.interval] ?? 86400) >= 86400) return;
+        refreshTimer = setInterval(async () => {
+          try {
+            const h = await api.history(SYMBOL, tf.interval, tf.range);
+            if (token === refreshSeq && h?.bars && h.bars.length) {
+              bars = h.bars;
+              this.pushCandles();
+            }
+          } catch {
+            // keep the bars we have
+          }
+        }, 60_000);
+      },
+
+      // Each tick lands in the bucket floor(tickTime / bucketSec): same bucket as the
+      // last bar → update it in place; a later bucket → append a new bar; older → ignore.
+      applyLiveTick() {
+        const lt = this.liveTick;
+        if (!lt || !lt.price || bars.length === 0) return;
+        const bucketSec = INTERVAL_SECS[this.tf.interval] ?? 86400;
+        const tickSecRaw = lt.ts ? toSec(lt.ts) : Math.floor(Date.now() / 1000);
+        const tickBucketStart = Math.floor(tickSecRaw / bucketSec) * bucketSec;
+        const last = bars[bars.length - 1];
+        const lastBucketStart = Math.floor(toSec(last.ts) / bucketSec) * bucketSec;
+        if (tickBucketStart === lastBucketStart) {
+          bars = [...bars.slice(0, -1), {
+            ...last,
+            close: lt.price,
+            high: Math.max(last.high, lt.price),
+            low: Math.min(last.low, lt.price),
+          }];
+        } else if (tickBucketStart > lastBucketStart) {
+          bars = [...bars, {
+            ts: new Date(tickBucketStart * 1000).toISOString(),
+            open: lt.price, high: lt.price, low: lt.price, close: lt.price, volume: 0,
+          }];
+        } else {
+          return; // stale message
+        }
+        this.pushCandles();
+      },
+
+      selectTf(id) {
+        if (id === this.tfId) return;
+        this.tfId = id;
+        cc()?.requestFit();
+        this.startIntradayRefresh();
+        this.load();
+      },
+
+      toggleIndicator(id) {
+        this.activeIndicators = this.activeIndicators.includes(id)
+          ? this.activeIndicators.filter((x) => x !== id)
+          : [...this.activeIndicators, id];
+        this.load();
+      },
+
+      toggleSmc() {
+        this.showSmc = !this.showSmc;
+        this.pushOverlays();
+        this.load();
+      },
+
+      toggleRuler() {
+        this.rulerMode = !this.rulerMode;
+        cc()?.setRulerMode(this.rulerMode);
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------- analyst opinion
+
+  const ENTRY_REVIEW_STYLE = {
+    GOOD_ENTRY: { cls: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200", label: "Good entry now" },
+    WAIT_FOR_PULLBACK: { cls: "border-amber-500/40 bg-amber-500/10 text-amber-200", label: "Wait for pullback" },
+    CHASE_RISK: { cls: "border-amber-500/40 bg-amber-500/10 text-amber-200", label: "Chase risk" },
+    AVOID: { cls: "border-rose-500/50 bg-rose-500/15 text-rose-200", label: "Avoid" },
+    NO_TRADE: { cls: "border-line bg-surface2 text-muted", label: "No trade" },
+  };
+
+  const RISK_MODE_BLURBS = {
+    conservative: "Blue-chip / long-term. Tight zones (±10%), 2× ATR stops. Most names won't have an actionable plan.",
+    balanced: "Mid-cap / swing. Wider zones (±20%), 2.5× ATR stops, price-action targets when forecast is uncertain.",
+    speculative: "Microcap / lottery. Loose zones (±35%), 3× ATR stops, tiny position cap (2%). For names where 30% moves are normal.",
+  };
+
+  const TIMEFRAME_LABELS = {
+    intraday: "Intraday (day trade)",
+    swing: "Swing (1–3 weeks)",
+    position: "Position (1–3 months)",
+    longterm: "Long-term (6m+)",
+  };
+
+  const TIMEFRAME_BLURBS = {
+    intraday: "15-minute bars × last month. Reads intraday swings, opening range, today's structure.",
+    swing: "Daily bars × last 6 months. Reads multi-week pivots and recent BOS/CHOCH for swing entries.",
+    position: "Daily bars × last 2 years. Reads broader structure for multi-month position trades.",
+    longterm: "Weekly bars × last decade. Reads cycle-level structure for long-term holds.",
+  };
+
+  /** "212.40 (-3.10%)" for a stop/target level, "—" when there is none. */
+  function levelText(level, move) {
+    return level ? `${fmtNumber(level)} ${move ? `(${fmtPct(move)})` : ""}` : "—";
+  }
+
+  function opinionPanel() {
+    return {
+      op: null,
+      err: null,
+      loading: false,
+      expanded: false,
+      riskMode: "conservative",
+      timeframe: "position",
+
+      async load(mode = this.riskMode, tf = this.timeframe) {
+        this.loading = true;
+        this.err = null;
+        try {
+          this.op = await api.opinion(SYMBOL, undefined, mode, tf);
+        } catch (e) {
+          this.err = errMsg(e);
+        } finally {
+          this.loading = false;
+        }
+      },
+
+      // Before the first opinion the selects only pick; afterwards they re-synthesize.
+      setTimeframe(t) {
+        this.timeframe = t;
+        if (this.op) this.load(this.riskMode, t);
+      },
+      setRiskMode(m) {
+        this.riskMode = m;
+        if (this.op) this.load(m, this.timeframe);
+      },
+
+      moveTo(level) {
+        const p = this.lastPrice;
+        return level && p ? ((level - p) / p) * 100 : null;
+      },
+      get move1() { return this.moveTo(this.op?.target_1); },
+      get move2() { return this.moveTo(this.op?.target_2); },
+      get stopMove() { return this.moveTo(this.op?.stop); },
+      get entryStyle() {
+        return ENTRY_REVIEW_STYLE[this.op?.entry_review?.assessment] ?? ENTRY_REVIEW_STYLE.NO_TRADE;
+      },
+      get signalEntries() {
+        return Object.entries(this.op?.signal_summary ?? {}).map(([k, v]) => ({ k, v }));
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------- smart money (SMC)
+
+  function confluenceCls(score) {
+    return score > 0.4 ? "border-emerald-500/40 text-emerald-300 bg-emerald-500/10"
+      : score > 0.15 ? "border-emerald-500/30 text-emerald-300 bg-emerald-500/5"
+      : score < -0.4 ? "border-rose-500/40 text-rose-300 bg-rose-500/10"
+      : score < -0.15 ? "border-rose-500/30 text-rose-300 bg-rose-500/5"
+      : "border-line text-muted";
+  }
+
+  function smartMoneyPanel() {
+    return {
+      data: null,
+      err: null,
+
+      init() {
+        api.priceAction(SYMBOL)
+          .then((d) => (this.data = d))
+          .catch((e) => (this.err = errMsg(e)));
+      },
+
+      get trend() { return this.data?.current_trend ?? "range"; },
+      get componentEntries() {
+        return Object.entries(this.data?.confluence?.components ?? {}).map(([k, v]) => ({ k, v }));
+      },
+      get activeFvgs() { return (this.data?.fvgs ?? []).filter((f) => !f.filled); },
+      get activeObs() { return (this.data?.order_blocks ?? []).filter((o) => !o.mitigated); },
+      get recentEvents() { return (this.data?.structure_events ?? []).slice(-3).reverse(); },
+      get recentSweeps() { return (this.data?.liquidity_sweeps ?? []).slice(-2).reverse(); },
+      get demand() {
+        return (this.data?.zones ?? []).filter((z) => z.direction === "bullish").sort((a, b) => b.strength - a.strength).slice(0, 4);
+      },
+      get supply() {
+        return (this.data?.zones ?? []).filter((z) => z.direction === "bearish").sort((a, b) => b.strength - a.strength).slice(0, 4);
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------- insiders / 13F / politicians
+
+  function txColor(tx) {
+    const action = tx["Transaction"] ?? tx["Action"] ?? "";
+    if (/buy|purchase/i.test(action)) return "text-success";
+    if (/sell|sale|sold/i.test(action)) return "text-danger";
+    return "";
+  }
+
+  function polSource(source) {
+    if (source?.startsWith("house_clerk")) {
+      return `official House Clerk filings${source.includes("finnhub") ? " + Finnhub (Senate)" : ""}`;
+    }
+    return source === "finnhub" ? "Finnhub (live)" : "DEMO sample — not real trades";
+  }
+
+  function insiderPanel() {
+    return {
+      tab: "insiders",
+      insider: null,
+      inst: null,
+      pol: null,
+
+      init() {
+        Promise.all([api.insider(SYMBOL), api.institutional(SYMBOL), api.politicians(SYMBOL)])
+          .then(([i, n, p]) => {
+            this.insider = i;
+            this.inst = n;
+            this.pol = p;
+          })
+          .catch(() => {});
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------- forecast + recommendation
+
+  const REC_LABEL_STYLE = {
+    STRONG_BUY: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40",
+    BUY: "bg-emerald-500/10 text-emerald-300 border-emerald-500/30",
+    HOLD: "bg-slate-500/15 text-slate-200 border-slate-500/30",
+    SELL: "bg-rose-500/10 text-rose-300 border-rose-500/30",
+    STRONG_SELL: "bg-rose-500/20 text-rose-300 border-rose-500/40",
+  };
+
+  const EXPL_COLORS = {
+    technical: "bg-accent",
+    fundamental: "bg-indigo-400",
+    sentiment_news: "bg-amber-400",
+    sentiment_social: "bg-pink-400",
+    macro: "bg-emerald-400",
+    events: "bg-rose-400",
+  };
+
+  const EXPL_LABELS = {
+    technical: "Technical",
+    fundamental: "Fundamentals",
+    sentiment_news: "News sentiment",
+    sentiment_social: "Social sentiment",
+    macro: "Macro",
+    events: "Events",
+  };
+
+  function freshnessBadge(freshness) {
+    const ts = freshness?.xgboost?.trained_at;
+    if (!ts) return null;
+    const days = (Date.now() - Date.parse(ts)) / 86400_000;
+    if (!Number.isFinite(days)) return null;
+    const text = days < 1 ? "trained today" : `trained ${Math.round(days)}d ago`;
+    const cls = days > 7
+      ? "border-rose-500/40 text-rose-300 bg-rose-500/5"
+      : days > 2
+        ? "border-amber-500/40 text-amber-300 bg-amber-500/5"
+        : "border-line text-muted";
+    return { text, cls };
+  }
+
+  /**
+   * Everything the ForecastCard derives from one forecast. Quality gates: low
+   * confidence de-emphasises the point estimate, a p10-p90 band wider than 50% of
+   * price means "no edge", and P(up) within 8 pts of 50% is a coin flip.
+   */
+  function forecastView(f, lastPrice) {
+    const upProb = f.direction_prob.up * 100;
+    const bandPct = lastPrice > 0 ? ((f.intervals.p90 - f.intervals.p10) / lastPrice) * 100 : 0;
+    const min = f.intervals.p10;
+    const range = f.intervals.p90 - min || 1;
+    return {
+      movePct: ((f.point - lastPrice) / lastPrice) * 100,
+      upProb,
+      fresh: freshnessBadge(f.freshness),
+      bandPct,
+      lowConfidence: f.confidence < 0.40,
+      noEdge: bandPct > 50,
+      coinFlip: Math.abs(upProb - 50) < 8,
+      mix: Object.entries(f.model_mix).map(([m, w]) => `${m} ${Math.round(w * 100)}%`).join(" · "),
+      bar: {
+        left: ((f.intervals.p25 - min) / range) * 100,
+        right: 100 - ((f.intervals.p75 - min) / range) * 100,
+        point: ((f.point - min) / range) * 100,
+        last: ((lastPrice - min) / range) * 100,
+      },
+    };
+  }
+
+  function aiPanel() {
+    return {
+      forecasts: null,
+      rec: null,
+      err: null,
+      loading: true,
+
+      init() {
+        Promise.all([api.forecast(SYMBOL, ["1d", "5d", "30d"]), api.recommend(SYMBOL)])
+          .then(([f, r]) => {
+            this.forecasts = f.forecasts;
+            this.rec = r;
+          })
+          .catch((e) => (this.err = errMsg(e)))
+          .finally(() => (this.loading = false));
+      },
+
+      // The forecast cards need the last price from the page's quote too.
+      get state() {
+        if (this.loading || this.lastPrice == null) return "loading";
+        if (this.err) return "error";
+        if (!this.forecasts || this.forecasts.length === 0) return "empty";
+        return "ok";
+      },
+      get r() { return this.rec?.reasoning ?? {}; },
+      get contribEntries() {
+        return Object.entries(this.forecasts?.[0]?.contributions ?? {})
+          .sort((a, b) => b[1] - a[1])
+          .map(([k, v]) => ({ k, v }));
+      },
+    };
+  }
+</script>
+{% endblock %}
