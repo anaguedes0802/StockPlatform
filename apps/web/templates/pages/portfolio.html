@@ -1,0 +1,1006 @@
+{% extends "base.html" %}
+
+{#
+  Port of app/portfolio/page.tsx + components/portfolio/{PositionTable,TransactionForm,
+  SectorPie,AIAnalysisPanel,AIReviewPanel}.tsx + components/pro/{PortfolioRiskPanel,ThesisJournal}.tsx.
+  Each child component is a nested x-data that reads the page's `detail` (portfolioId = detail.id).
+#}
+
+{% set INP = "w-full bg-surface2 border border-line rounded px-2 py-1.5 text-sm" %}
+
+{# Page-level metric tile (Stat in page.tsx). value / cls are JS expressions. #}
+{% macro stat(label, value, cls="''") -%}
+<div class="card p-4">
+  <div class="text-xs text-muted">{{ label }}</div>
+  <div :class="cn('text-xl font-mono tabular mt-1', {{ cls }})" x-text="{{ value }}"></div>
+</div>
+{%- endmacro %}
+
+{# Small stat inside the AI analysis panel (Stat in AIAnalysisPanel.tsx). #}
+{% macro ai_stat(label, value, cls="''") -%}
+<div class="bg-surface2 rounded px-2 py-1.5">
+  <div class="text-[10px] uppercase tracking-wide text-muted">{{ label }}</div>
+  <div :class="cn('font-mono tabular text-sm mt-0.5', {{ cls }})" x-text="{{ value }}"></div>
+</div>
+{%- endmacro %}
+
+{# Risk tile (Tile in PortfolioRiskPanel.tsx). warn is a JS boolean expression. #}
+{% macro tile(label, value, warn) -%}
+<div :class="cn('card p-3', ({{ warn }}) && 'border-amber-500/40 bg-amber-500/5')">
+  <div class="text-xs text-muted">{{ label }}</div>
+  <div :class="cn('text-lg font-mono tabular mt-0.5', ({{ warn }}) && 'text-amber-300')" x-text="{{ value }}"></div>
+</div>
+{%- endmacro %}
+
+{# Labelled form field (Field in ThesisJournal.tsx). #}
+{% macro tfield(label) -%}
+<label class="block">
+  <span class="text-[11px] text-muted block mb-0.5">{{ label }}</span>
+  {{ caller() }}
+</label>
+{%- endmacro %}
+
+{# Severity icon (info / warning / critical) for alert rows. `sev` is a JS expression. #}
+{% macro sev_icon(sev, size) -%}
+<span x-show="{{ sev }} === 'info'" class="inline-flex shrink-0 mt-0.5"><i data-lucide="info" class="{{ size }} shrink-0"></i></span>
+<span x-show="{{ sev }} === 'warning'" class="inline-flex shrink-0 mt-0.5"><i data-lucide="alert-triangle" class="{{ size }} shrink-0"></i></span>
+<span x-show="{{ sev }} === 'critical'" class="inline-flex shrink-0 mt-0.5"><i data-lucide="alert-circle" class="{{ size }} shrink-0"></i></span>
+{%- endmacro %}
+
+{% block content %}
+<div x-data="portfolioPage()">
+  <div x-show="!$store.auth.ready" class="p-6 text-sm text-muted">Loading…</div>
+
+  <template hidden x-if="$store.auth.ready && !$store.auth.me">
+    <div class="p-6">
+      <div class="card p-8 text-sm space-y-2">
+        <p class="text-text">Portfolio requires an account.</p>
+        <p class="text-muted">
+          <a href="/login" class="text-accent">Sign in</a> or <a href="/register" class="text-accent">create an account</a> to start tracking holdings.
+        </p>
+      </div>
+    </div>
+  </template>
+
+  <template hidden x-if="$store.auth.ready && $store.auth.me">
+    <div class="p-6 space-y-6">
+      <div class="flex items-end justify-between flex-wrap gap-3">
+        <div>
+          <h1 class="text-2xl font-semibold tracking-tight">Portfolio</h1>
+          <p class="text-sm text-muted mt-1">Track holdings, P&amp;L, and sector allocation.</p>
+        </div>
+        <form @submit.prevent="createPortfolio()" class="flex items-center gap-2">
+          <input x-model="newName" class="bg-surface2 border border-line rounded px-2 py-1 text-sm" placeholder="Portfolio name">
+          <button class="rounded bg-accent text-bg font-medium px-3 py-1 text-sm">+ New</button>
+        </form>
+      </div>
+
+      <template hidden x-if="portfolios && portfolios.length > 0">
+        <div class="flex flex-wrap gap-2">
+          <template hidden x-for="p in portfolios" :key="p.id">
+            <button @click="active = p.id"
+                    :class="cn('pill border', active === p.id ? 'border-accent text-accent bg-accent/10' : 'border-line text-muted hover:text-text')"
+                    x-text="p.name"></button>
+          </template>
+        </div>
+      </template>
+
+      <template hidden x-if="err">
+        <div class="text-sm text-danger" x-text="err"></div>
+      </template>
+
+      <template hidden x-if="detail">
+        <div class="space-y-6">
+          <div class="grid grid-cols-2 md:grid-cols-6 gap-3">
+            {{ stat("Total value", "fmtNumber(detail.metrics.total_value)") }}
+            {{ stat("Cost basis", "fmtNumber(detail.metrics.cost_basis)") }}
+            {{ stat("Unrealized P/L", "fmtNumber(detail.metrics.unrealized_pl)", "changeColor(detail.metrics.unrealized_pl)") }}
+            {{ stat("Dividends", "fmtNumber(detail.metrics.total_dividends ?? 0)", "'text-accent'") }}
+            {{ stat("Total return", "fmtNumber(detail.metrics.total_return ?? detail.metrics.unrealized_pl)", "changeColor(detail.metrics.total_return ?? detail.metrics.unrealized_pl)") }}
+            {{ stat("Return %", "fmtPct(detail.metrics.total_return_pct ?? detail.metrics.unrealized_pl_pct)", "changeColor(detail.metrics.total_return_pct ?? detail.metrics.unrealized_pl_pct)") }}
+          </div>
+
+          <!-- ================= AIReviewPanel ================= -->
+          <div x-data="aiReviewPanel()">
+            <template hidden x-if="!data && !loading">
+              <div class="card p-4 flex items-center gap-3">
+                <i data-lucide="brain" class="size-5 text-accent"></i>
+                <div class="flex-1">
+                  <div class="text-sm font-medium">AI position review</div>
+                  <div class="text-xs text-muted">Position-by-position verdict (HOLD / ADD / TRIM / SELL / STOP-OUT) with alerts, recommended stops, and what changed since you bought. Uses Claude when ANTHROPIC_API_KEY is set; deterministic synthesis otherwise.</div>
+                </div>
+                <button @click="review()" class="rounded bg-accent text-bg font-medium px-3 py-1.5 text-sm">
+                  Review with AI
+                </button>
+                <template hidden x-if="err">
+                  <div class="text-xs text-danger break-all max-w-xs" x-text="err"></div>
+                </template>
+              </div>
+            </template>
+
+            <template hidden x-if="loading">
+              <div class="card p-6 text-center">
+                <div class="inline-flex items-center gap-2 text-sm text-muted">
+                  <i data-lucide="brain" class="size-4 text-accent animate-pulse"></i>
+                  Reviewing every position… (cold scans take 30-60s)
+                </div>
+              </div>
+            </template>
+
+            <template hidden x-if="data && !loading">
+              <div class="space-y-3">
+                <!-- Top banner -->
+                <div class="card p-3 flex items-center gap-3 flex-wrap">
+                  <i data-lucide="brain" class="size-5 text-accent"></i>
+                  <div class="text-sm font-medium">AI position review</div>
+                  <div class="text-xs text-muted tabular"
+                       x-text="`${data.n_positions} positions · ${data.n_critical} critical · ${data.n_warnings} warnings · as of ${new Date(data.as_of).toLocaleTimeString()}`"></div>
+                  <button @click="review()" class="ml-auto text-xs text-accent hover:underline">
+                    Re-review
+                  </button>
+                </div>
+
+                <!-- Urgent banner -->
+                <template hidden x-if="allCritical.length > 0">
+                  <div class="card p-3 border-rose-500/40 bg-rose-500/5">
+                    <div class="text-xs uppercase tracking-wide text-rose-300 font-medium mb-2">🚨 Critical alerts</div>
+                    <ul class="space-y-1 text-sm">
+                      <template hidden x-for="(a, i) in allCritical" :key="i">
+                        <li class="text-rose-200">
+                          <span class="font-mono tabular text-rose-300" x-text="a.sym"></span> — <span x-text="a.message"></span>
+                        </li>
+                      </template>
+                    </ul>
+                  </div>
+                </template>
+
+                <!-- Per-position cards -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <template hidden x-for="r in sorted" :key="r.symbol">
+                    <div class="card p-4 space-y-2">
+                      <div class="flex items-center justify-between gap-2">
+                        <div class="flex items-center gap-2">
+                          <span class="font-mono font-medium text-text" x-text="r.symbol"></span>
+                          <span :class="cn('pill border inline-flex items-center gap-1', REVIEW_VERDICT_STYLES[r.verdict].cls)">
+                            <span x-show="r.verdict === 'HOLD'" class="inline-flex"><i data-lucide="pause" class="size-3"></i></span>
+                            <span x-show="r.verdict === 'ADD'" class="inline-flex"><i data-lucide="trending-up" class="size-3"></i></span>
+                            <span x-show="r.verdict === 'TRIM' || r.verdict === 'SELL'" class="inline-flex"><i data-lucide="trending-down" class="size-3"></i></span>
+                            <span x-show="r.verdict === 'STOP_OUT'" class="inline-flex"><i data-lucide="alert-circle" class="size-3"></i></span>
+                            <span x-text="REVIEW_VERDICT_STYLES[r.verdict].label"></span>
+                          </span>
+                          <span class="text-[10px] text-muted tabular" x-text="`conf ${(r.confidence * 100).toFixed(0)}%`"></span>
+                        </div>
+                        <div :class="cn('text-sm tabular font-mono', changeColor(r.unrealized_pl_pct))" x-text="fmtPct(r.unrealized_pl_pct)"></div>
+                      </div>
+
+                      <div class="text-xs text-muted tabular">
+                        <span x-text="`${r.quantity} sh × $${fmtNumber(r.cost_basis)} → $${fmtNumber(r.last_price)} · ${r.days_held}d held`"></span>
+                        <template hidden x-if="r.recommended_stop">
+                          <span class="ml-2 text-rose-300/80" x-text="`stop $${fmtNumber(r.recommended_stop)}`"></span>
+                        </template>
+                      </div>
+
+                      <p class="text-sm text-text leading-snug" x-text="r.narrative"></p>
+
+                      <template hidden x-if="r.what_changed.length > 0">
+                        <div class="pt-1">
+                          <div class="text-[10px] uppercase tracking-wide text-muted mb-1">What changed</div>
+                          <ul class="space-y-0.5 text-xs text-muted">
+                            <template hidden x-for="(c, i) in r.what_changed" :key="i">
+                              <li x-text="`· ${c}`"></li>
+                            </template>
+                          </ul>
+                        </div>
+                      </template>
+
+                      <template hidden x-if="r.alerts.length > 0">
+                        <div class="pt-1 space-y-1">
+                          <template hidden x-for="(a, i) in r.alerts" :key="i">
+                            <div :class="cn('flex items-start gap-1.5 text-xs px-2 py-1 rounded border', SEVERITY_STYLES[a.severity])">
+                              {{ sev_icon("a.severity", "size-3") }}
+                              <span x-text="a.message"></span>
+                            </div>
+                          </template>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <!-- ================= PortfolioRiskPanel ================= -->
+          <div x-data="portfolioRiskPanel()">
+            <template hidden x-if="!data && !loading">
+              <div class="card p-4 flex items-center gap-3 flex-wrap">
+                <i data-lucide="shield-alert" class="size-5 text-accent"></i>
+                <div class="flex-1 min-w-[12rem]">
+                  <div class="text-sm font-medium">Portfolio risk (book-level)</div>
+                  <div class="text-xs text-muted">
+                    The view a PM manages from: concentration, sector &amp; beta exposure, correlation clusters
+                    (holdings that move as one bet), and total capital at risk if every stop hit at once.
+                  </div>
+                </div>
+                <button @click="analyze()" class="rounded bg-accent text-bg font-medium px-3 py-1.5 text-sm">
+                  Analyze risk
+                </button>
+                <template hidden x-if="err">
+                  <div class="text-xs text-danger break-all max-w-xs" x-text="err"></div>
+                </template>
+              </div>
+            </template>
+
+            <template hidden x-if="loading">
+              <div class="card p-6 text-center">
+                <div class="inline-flex items-center gap-2 text-sm text-muted">
+                  <i data-lucide="shield-alert" class="size-4 text-accent animate-pulse"></i>
+                  Aggregating exposures across the book…
+                </div>
+              </div>
+            </template>
+
+            <template hidden x-if="data && !loading && !data.ok">
+              <div class="card p-4 flex items-center gap-3">
+                <i data-lucide="shield-alert" class="size-5 text-muted"></i>
+                <div class="text-sm text-muted flex-1" x-text="`No open positions to analyze (${data.reason}).`"></div>
+                <button @click="analyze()" class="text-xs text-accent hover:underline">Retry</button>
+              </div>
+            </template>
+
+            <template hidden x-if="data && !loading && data.ok">
+              <div class="space-y-3">
+                <div class="card p-3 flex items-center gap-3 flex-wrap">
+                  <i data-lucide="shield-alert" class="size-5 text-accent"></i>
+                  <div class="text-sm font-medium">Portfolio risk</div>
+                  <div class="text-xs text-muted tabular"
+                       x-text="`${data.n_holdings} holdings · ~${data.n_effective_bets} effective bets · $${fmtNumber(data.total_market_value)} MV`"></div>
+                  <button @click="analyze()" class="ml-auto text-xs text-accent hover:underline">Re-analyze</button>
+                </div>
+
+                <!-- Metric tiles -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {{ tile("Largest position", "`${data.largest_position.symbol} ${data.largest_position.weight_pct}%`", "data.largest_position.weight_pct > 35") }}
+                  {{ tile("Top-3 weight", "`${data.top3_weight_pct}%`", "data.top3_weight_pct > 60") }}
+                  {{ tile("Portfolio beta", "data.portfolio_beta != null ? data.portfolio_beta.toFixed(2) : '—'", "(data.portfolio_beta ?? 0) > 1.5") }}
+                  {{ tile("Capital at risk", "data.total_capital_at_risk_pct != null ? `-${data.total_capital_at_risk_pct}%` : '—'", "(data.total_capital_at_risk_pct ?? 0) > 12") }}
+                </div>
+
+                <!-- Sector exposure -->
+                <template hidden x-if="sectorsUnknown">
+                  <div class="card p-3 text-xs text-muted">
+                    Sector exposure unavailable right now (the sector data feed is rate-limited). Concentration, beta, and correlation checks above are unaffected.
+                  </div>
+                </template>
+                <template hidden x-if="sectors.length > 0">
+                  <div class="card p-4">
+                    <div class="text-xs uppercase tracking-wide text-muted mb-2">Sector exposure</div>
+                    <div class="space-y-1.5">
+                      <template hidden x-for="[sec, w] in sectors" :key="sec">
+                        <div class="flex items-center gap-2 text-xs">
+                          <div class="w-28 truncate text-muted" x-text="sec"></div>
+                          <div class="flex-1 h-2 rounded bg-surface2 overflow-hidden">
+                            <div :class="cn('h-full rounded', w > 50 ? 'bg-amber-400' : 'bg-accent')"
+                                 :style="`width: ${(w / maxSector) * 100}%`"></div>
+                          </div>
+                          <div class="w-10 text-right tabular" x-text="`${w}%`"></div>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- Correlation clusters -->
+                <template hidden x-if="data.correlation_clusters.length > 0">
+                  <div class="card p-4">
+                    <div class="text-xs uppercase tracking-wide text-muted mb-2 flex items-center gap-1">
+                      <i data-lucide="layers" class="size-3"></i> Correlation clusters (move as one bet)
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                      <template hidden x-for="(grp, i) in data.correlation_clusters" :key="i">
+                        <div class="pill border border-amber-500/40 bg-amber-500/10 text-amber-200" x-text="grp.join(' · ')"></div>
+                      </template>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- Warnings -->
+                <div class="space-y-1.5">
+                  <template hidden x-for="(w, i) in data.warnings" :key="i">
+                    <div :class="cn('flex items-start gap-1.5 text-sm px-3 py-2 rounded border', SEVERITY_STYLES[w.severity])">
+                      {{ sev_icon("w.severity", "size-4") }}
+                      <span x-text="w.message"></span>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div class="lg:col-span-2 space-y-6">
+              <!-- ================= PositionTable ================= -->
+              <template hidden x-if="detail.positions.length === 0">
+                <div class="card p-6 text-sm text-muted">No positions yet. Add a transaction below.</div>
+              </template>
+              <template hidden x-if="detail.positions.length > 0">
+                <div class="card overflow-x-auto">
+                  <table class="w-full text-sm">
+                    <thead class="text-xs uppercase tracking-wide text-muted border-b border-line">
+                      <tr>
+                        <th class="text-left px-4 py-2">Symbol</th>
+                        <th class="text-right px-4 py-2">Qty</th>
+                        <th class="text-right px-4 py-2">Avg cost</th>
+                        <th class="text-right px-4 py-2">Last</th>
+                        <th class="text-right px-4 py-2">Value</th>
+                        <th class="text-right px-4 py-2">Unrealized P/L</th>
+                        <th class="text-right px-4 py-2">%</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <template hidden x-for="p in detail.positions" :key="p.symbol">
+                        <tr class="border-b border-line last:border-0 hover:bg-surface2">
+                          <td class="px-4 py-2 font-mono">
+                            <a :href="'/stocks/' + p.symbol" class="hover:text-accent" x-text="p.symbol"></a>
+                          </td>
+                          <td class="px-4 py-2 text-right tabular" x-text="fmtNumber(parseFloat(p.quantity), 4)"></td>
+                          <td class="px-4 py-2 text-right tabular" x-text="fmtNumber(parseFloat(p.avg_buy_price))"></td>
+                          <td class="px-4 py-2 text-right tabular" x-text="fmtNumber(p.last_price)"></td>
+                          <td class="px-4 py-2 text-right tabular" x-text="fmtNumber(p.market_value)"></td>
+                          <td :class="cn('px-4 py-2 text-right tabular', changeColor(p.unrealized_pl))" x-text="fmtNumber(p.unrealized_pl)"></td>
+                          <td :class="cn('px-4 py-2 text-right tabular', changeColor(p.unrealized_pl_pct))" x-text="fmtPct(p.unrealized_pl_pct)"></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </template>
+
+              <!-- ================= TransactionForm ================= -->
+              <form x-data="transactionForm()" @submit.prevent="submit()" class="card p-4 space-y-3">
+                <div class="text-sm font-medium">Add transaction</div>
+                <div class="grid grid-cols-2 sm:grid-cols-6 gap-2 text-sm">
+                  <input class="col-span-2 bg-surface2 border border-line rounded px-2 py-1 font-mono uppercase"
+                         x-model="symbol" placeholder="AAPL" required>
+                  <select class="bg-surface2 border border-line rounded px-2 py-1" x-model="side">
+                    <option value="buy">Buy</option><option value="sell">Sell</option>
+                  </select>
+                  <input class="bg-surface2 border border-line rounded px-2 py-1 tabular" x-model="qty" placeholder="qty" required>
+                  <input class="bg-surface2 border border-line rounded px-2 py-1 tabular" x-model="price" placeholder="price" required>
+                  <input class="bg-surface2 border border-line rounded px-2 py-1 tabular" x-model="fee" placeholder="fee">
+                  <input type="date"
+                         class="col-span-2 sm:col-span-3 bg-surface2 border border-line rounded px-2 py-1 tabular"
+                         x-model="occurredAt">
+                  <button :disabled="busy" class="col-span-2 sm:col-span-3 rounded bg-accent text-bg font-medium py-1 disabled:opacity-50"
+                          x-text="busy ? 'Saving…' : 'Add'"></button>
+                </div>
+                <template hidden x-if="err">
+                  <div class="text-xs text-danger break-all" x-text="err"></div>
+                </template>
+              </form>
+            </div>
+
+            <div class="space-y-6">
+              <!-- ================= SectorPie ================= -->
+              <template hidden x-if="sectorData.length > 0">
+                <div class="card">
+                  <div class="card-header">Sector allocation</div>
+                  <div style="height: 240px" x-effect="drawSectorPie($el, sectorData)"></div>
+                  <ul class="px-4 pb-3 grid grid-cols-2 gap-1 text-xs">
+                    <template hidden x-for="(d, i) in sectorData" :key="d.name">
+                      <li class="flex items-center gap-2">
+                        <span class="size-2 rounded-sm" :style="`background: ${SECTOR_COLORS[i % SECTOR_COLORS.length]}`"></span>
+                        <span class="text-muted flex-1 truncate" x-text="d.name"></span>
+                        <span class="tabular" x-text="`${(d.value * 100).toFixed(1)}%`"></span>
+                      </li>
+                    </template>
+                  </ul>
+                </div>
+              </template>
+
+              <!-- ================= AIAnalysisPanel ================= -->
+              <div x-data="aiAnalysisPanel()">
+                <template hidden x-if="!data">
+                  <div class="card p-4 flex items-center gap-3">
+                    <i data-lucide="brain" class="size-5 text-accent"></i>
+                    <div class="flex-1">
+                      <div class="text-sm font-medium">AI portfolio analysis</div>
+                      <div class="text-xs text-muted">Risk metrics, concentration warnings, rebalance suggestions, hedging.</div>
+                    </div>
+                    <button @click="run()" :disabled="busy" class="rounded bg-accent text-bg font-medium px-3 py-1.5 text-sm disabled:opacity-50"
+                            x-text="busy ? 'Analyzing…' : 'Analyze'"></button>
+                    <template hidden x-if="err">
+                      <div class="text-xs text-danger break-all" x-text="err"></div>
+                    </template>
+                  </div>
+                </template>
+
+                <template hidden x-if="data">
+                  <div class="card">
+                    <div class="card-header">
+                      <div class="flex items-center gap-2">
+                        <i data-lucide="brain" class="size-4 text-accent"></i>
+                        <span class="text-text font-medium">AI portfolio analysis</span>
+                      </div>
+                      <div class="text-xs text-muted" x-text="`Diversification ${data.diversification_score}/100`"></div>
+                    </div>
+
+                    <div class="px-4 py-3 space-y-4 text-sm">
+                      <p class="text-text" x-text="data.summary"></p>
+
+                      <template hidden x-if="data.alerts.length > 0">
+                        <div class="rounded border border-amber-500/30 bg-amber-500/5 p-3">
+                          <div class="flex items-center gap-2 text-amber-300 text-xs font-medium mb-2">
+                            <i data-lucide="shield-alert" class="size-3.5"></i> Risk alerts
+                          </div>
+                          <ul class="space-y-0.5 text-xs text-muted">
+                            <template hidden x-for="(a, i) in data.alerts" :key="i">
+                              <li x-text="`· ${a}`"></li>
+                            </template>
+                          </ul>
+                        </div>
+                      </template>
+
+                      <div>
+                        <div class="text-xs uppercase tracking-wide text-muted mb-2">Risk metrics</div>
+                        <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+                          {{ ai_stat("Volatility (ann.)", "`${data.risk_metrics.volatility_annual_pct}%`") }}
+                          {{ ai_stat("Sharpe", "fmtNumber(data.risk_metrics.sharpe)") }}
+                          {{ ai_stat("Sortino", "fmtNumber(data.risk_metrics.sortino)") }}
+                          {{ ai_stat("Beta vs SPY", "fmtNumber(data.risk_metrics.beta_vs_spy)", "data.risk_metrics.beta_vs_spy > 1.3 ? 'text-warning' : ''") }}
+                          {{ ai_stat("Max drawdown", "`${data.risk_metrics.max_drawdown_pct}%`", "'text-danger'") }}
+                          {{ ai_stat("VaR(95) daily", "`${data.risk_metrics.value_at_risk_95_daily_pct}%`", "'text-danger'") }}
+                        </div>
+                      </div>
+
+                      <template hidden x-if="data.rec_aggregate">
+                        <div>
+                          <div class="text-xs uppercase tracking-wide text-muted mb-2">Per-position AI verdicts</div>
+                          <div class="text-xs mb-2">
+                            <span class="text-muted">Portfolio-weighted: </span>
+                            <span class="pill bg-surface2 border border-line tabular"
+                                  x-text="`${data.rec_aggregate.avg_label} (${data.rec_aggregate.avg_score >= 0 ? '+' : ''}${data.rec_aggregate.avg_score})`"></span>
+                          </div>
+                          <ul class="space-y-0.5 text-xs">
+                            <template hidden x-for="r in data.rec_aggregate.per_symbol" :key="r.symbol">
+                              <li class="flex items-center justify-between">
+                                <a :href="'/stocks/' + r.symbol" class="font-mono text-text hover:text-accent" x-text="r.symbol"></a>
+                                <span :class="cn('tabular font-mono', r.score > 0.2 ? 'text-success' : r.score < -0.2 ? 'text-danger' : 'text-muted')"
+                                      x-text="`${r.label} ${r.score >= 0 ? '+' : ''}${r.score.toFixed(2)}`"></span>
+                              </li>
+                            </template>
+                          </ul>
+                        </div>
+                      </template>
+
+                      <template hidden x-if="data.rebalance_suggestions.length > 0">
+                        <div>
+                          <div class="flex items-center gap-2 text-xs uppercase tracking-wide text-muted mb-2">
+                            <i data-lucide="scale" class="size-3"></i> Mean-variance rebalance
+                          </div>
+                          <table class="w-full text-xs">
+                            <thead class="text-muted">
+                              <tr><th class="text-left py-1">Symbol</th><th class="text-right">Current</th><th class="text-right">Target</th><th class="text-right">Δ</th><th class="text-right">$ Δ</th></tr>
+                            </thead>
+                            <tbody>
+                              <template hidden x-for="r in data.rebalance_suggestions" :key="r.symbol">
+                                <tr class="border-b border-line/40 last:border-0">
+                                  <td class="py-1 font-mono" x-text="r.symbol"></td>
+                                  <td class="text-right tabular" x-text="`${r.current_weight_pct}%`"></td>
+                                  <td class="text-right tabular" x-text="`${r.target_weight_pct}%`"></td>
+                                  <td :class="cn('text-right tabular', changeColor(r.delta_pct))" x-text="fmtPct(r.delta_pct)"></td>
+                                  <td :class="cn('text-right tabular', changeColor(r.dollar_delta))" x-text="fmtNumber(r.dollar_delta)"></td>
+                                </tr>
+                              </template>
+                            </tbody>
+                          </table>
+                        </div>
+                      </template>
+
+                      <template hidden x-if="data.hedging_suggestions?.rationale">
+                        <div>
+                          <div class="text-xs uppercase tracking-wide text-muted mb-1">Hedging</div>
+                          <p class="text-xs text-muted" x-text="data.hedging_suggestions.rationale"></p>
+                          <template hidden x-if="data.hedging_suggestions.instrument">
+                            <div class="text-xs mt-1">
+                              <span class="text-muted">Suggested: </span>
+                              <span class="font-mono" x-text="data.hedging_suggestions.instrument"></span>
+                              <span class="tabular" x-text="`$${fmtNumber(data.hedging_suggestions.suggested_notional)}`"></span>
+                              <template hidden x-if="data.hedging_suggestions.alt_instrument">
+                                <span class="text-muted" x-text="` · alt: ${data.hedging_suggestions.alt_instrument} $${fmtNumber(data.hedging_suggestions.alt_notional)}`"></span>
+                              </template>
+                            </div>
+                          </template>
+                        </div>
+                      </template>
+                    </div>
+
+                    <div class="px-4 pb-3">
+                      <button @click="run()" class="text-xs pill border border-line text-muted hover:text-text">Refresh</button>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <h2 class="text-lg font-semibold tracking-tight mb-3">Thesis journal</h2>
+
+            <!-- ================= ThesisJournal ================= -->
+            <div x-data="thesisJournal()" class="space-y-3">
+              <div class="card p-3 flex items-center gap-3 flex-wrap">
+                <i data-lucide="book-open" class="size-5 text-accent"></i>
+                <div class="flex-1 min-w-[12rem]">
+                  <div class="text-sm font-medium">Thesis journal</div>
+                  <div class="text-xs text-muted">
+                    Write down <em>why</em> you're in a trade, what would prove you wrong, and the target. Each is graded live against price.
+                  </div>
+                </div>
+                <label class="text-xs text-muted inline-flex items-center gap-1 cursor-pointer">
+                  <input type="checkbox" x-model="includeClosed">
+                  Show closed
+                </label>
+                <button @click="showForm = !showForm"
+                        class="rounded bg-accent text-bg font-medium px-3 py-1.5 text-sm inline-flex items-center gap-1">
+                  <i data-lucide="plus" class="size-4"></i> New thesis
+                </button>
+              </div>
+
+              <template hidden x-if="err">
+                <div class="card p-2 text-xs text-danger break-all" x-text="err"></div>
+              </template>
+
+              <template hidden x-if="showForm">
+                <form @submit.prevent="create()" class="card p-4 space-y-3">
+                  <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {% call tfield("Symbol*") %}
+                      <input x-model="form.symbol" class="{{ INP }} font-mono uppercase" placeholder="FEMY" maxlength="20">
+                    {% endcall %}
+                    {% call tfield("Direction") %}
+                      <select x-model="form.direction" class="{{ INP }}">
+                        <option value="long">Long</option>
+                        <option value="short">Short</option>
+                      </select>
+                    {% endcall %}
+                    {% call tfield("Conviction (1-5)") %}
+                      <input type="number" min="1" max="5" x-model.number="form.conviction" class="{{ INP }}">
+                    {% endcall %}
+                    {% call tfield("Horizon (days)") %}
+                      <input x-model="form.horizon_days" class="{{ INP }}" placeholder="60" inputmode="numeric">
+                    {% endcall %}
+                  </div>
+                  {% call tfield("Thesis* — why this trade") %}
+                    <textarea x-model="form.thesis" class="{{ INP }} h-20 resize-y" placeholder="What's the edge? What does the market not see yet?"></textarea>
+                  {% endcall %}
+                  {% call tfield("Catalyst — what makes it play out") %}
+                    <input x-model="form.catalyst" class="{{ INP }}" placeholder="FDA decision, earnings, product launch…">
+                  {% endcall %}
+                  <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {% call tfield("Entry price") %}<input x-model="form.entry_price" class="{{ INP }}" inputmode="decimal">{% endcall %}
+                    {% call tfield("Invalidation (stop)") %}<input x-model="form.invalidation_price" class="{{ INP }}" inputmode="decimal">{% endcall %}
+                    {% call tfield("Target 1") %}<input x-model="form.target_1" class="{{ INP }}" inputmode="decimal">{% endcall %}
+                    {% call tfield("Target 2") %}<input x-model="form.target_2" class="{{ INP }}" inputmode="decimal">{% endcall %}
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <button :disabled="busy" class="rounded bg-accent text-bg font-medium px-4 py-1.5 text-sm disabled:opacity-50"
+                            x-text="busy ? 'Saving…' : 'Commit thesis'"></button>
+                    <button type="button" @click="showForm = false" class="text-xs text-muted hover:text-text">Cancel</button>
+                  </div>
+                </form>
+              </template>
+
+              <template hidden x-if="theses === null">
+                <div class="card p-4 text-sm text-muted">Loading…</div>
+              </template>
+              <template hidden x-if="theses !== null && theses.length === 0">
+                <div class="card p-6 text-sm text-muted text-center">
+                  No theses yet. Commit one before your next trade — it's the discipline that separates a process from a gamble.
+                </div>
+              </template>
+              <template hidden x-if="theses !== null && theses.length > 0">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <template hidden x-for="t in theses" :key="t.id">
+                    <div :class="cn('card p-4 space-y-2', t.status !== 'active' && 'opacity-60')">
+                      <div class="flex items-center justify-between gap-2">
+                        <div class="flex items-center gap-2 flex-wrap">
+                          <a :href="'/stocks/' + t.symbol" class="font-mono font-medium text-text hover:text-accent" x-text="t.symbol"></a>
+                          <span :class="cn('pill border text-[10px] uppercase', t.direction === 'short' ? 'border-rose-500/40 text-rose-300' : 'border-emerald-500/40 text-emerald-300')"
+                                x-text="t.direction"></span>
+                          <template hidden x-if="t.status === 'active'">
+                            <span :class="cn('pill border inline-flex items-center gap-1', thesisStatus(t).cls)">
+                              <span x-show="thesisStatus(t).icon === 'circle-dot'" class="inline-flex"><i data-lucide="circle-dot" class="size-3"></i></span>
+                              <span x-show="thesisStatus(t).icon === 'target'" class="inline-flex"><i data-lucide="target" class="size-3"></i></span>
+                              <span x-show="thesisStatus(t).icon === 'shield-x'" class="inline-flex"><i data-lucide="shield-x" class="size-3"></i></span>
+                              <span x-show="thesisStatus(t).icon === 'clock'" class="inline-flex"><i data-lucide="clock" class="size-3"></i></span>
+                              <span x-text="thesisStatus(t).label"></span>
+                            </span>
+                          </template>
+                          <template hidden x-if="t.status !== 'active'">
+                            <span class="pill border border-line text-muted">closed</span>
+                          </template>
+                          <span class="text-[10px] text-muted" x-text="`conv ${t.conviction}/5`"></span>
+                        </div>
+                        <template hidden x-if="t.pnl_pct != null">
+                          <div :class="cn('text-sm font-mono tabular', changeColor(t.pnl_pct))" x-text="fmtPct(t.pnl_pct)"></div>
+                        </template>
+                      </div>
+
+                      <p class="text-sm text-text leading-snug" x-text="t.thesis"></p>
+                      <template hidden x-if="t.catalyst">
+                        <div class="text-xs text-muted" x-text="`⚡ ${t.catalyst}`"></div>
+                      </template>
+
+                      <div class="grid grid-cols-3 gap-2 text-[11px] text-muted tabular pt-1">
+                        <template hidden x-if="t.entry_price != null">
+                          <div>Entry <span class="text-text" x-text="`$${fmtNumber(t.entry_price)}`"></span></div>
+                        </template>
+                        <template hidden x-if="t.last_price != null">
+                          <div>Last <span class="text-text" x-text="`$${fmtNumber(t.last_price)}`"></span></div>
+                        </template>
+                        <template hidden x-if="t.invalidation_price != null">
+                          <div>Stop <span class="text-rose-300" x-text="`$${fmtNumber(t.invalidation_price)}`"></span><template hidden x-if="t.pct_to_invalidation != null"><span class="ml-1" x-text="`(${t.pct_to_invalidation}%)`"></span></template></div>
+                        </template>
+                        <template hidden x-if="t.target_1 != null">
+                          <div>T1 <span class="text-sky-300" x-text="`$${fmtNumber(t.target_1)}`"></span><template hidden x-if="t.pct_to_target_1 != null"><span class="ml-1" x-text="`(${t.pct_to_target_1}%)`"></span></template></div>
+                        </template>
+                        <template hidden x-if="t.target_2 != null">
+                          <div>T2 <span class="text-sky-300" x-text="`$${fmtNumber(t.target_2)}`"></span></div>
+                        </template>
+                        <template hidden x-if="t.days_remaining != null">
+                          <div x-text="`${t.days_remaining}d left`"></div>
+                        </template>
+                      </div>
+
+                      <template hidden x-if="t.status === 'active' && t.status_note">
+                        <div :class="cn('text-xs px-2 py-1.5 rounded border', thesisStatus(t).cls)" x-text="t.status_note"></div>
+                      </template>
+
+                      <template hidden x-if="t.status === 'active'">
+                        <div class="flex items-center gap-3 pt-1">
+                          <button @click="close(t.id)" class="text-xs text-muted hover:text-accent inline-flex items-center gap-1">
+                            <i data-lucide="check" class="size-3"></i> Close
+                          </button>
+                          <button @click="remove(t.id)" class="text-xs text-muted hover:text-danger inline-flex items-center gap-1">
+                            <i data-lucide="x" class="size-3"></i> Delete
+                          </button>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+  </template>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // ---- styling tables (copied from the React components) ----
+
+  // AIReviewPanel VERDICT_STYLES (icon is rendered in the template per verdict)
+  const REVIEW_VERDICT_STYLES = {
+    HOLD:     { cls: "bg-slate-500/15 text-slate-200 border-slate-500/40",       label: "Hold" },
+    ADD:      { cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40", label: "Add" },
+    TRIM:     { cls: "bg-amber-500/15 text-amber-300 border-amber-500/40",       label: "Trim" },
+    SELL:     { cls: "bg-rose-500/15 text-rose-300 border-rose-500/40",          label: "Sell" },
+    STOP_OUT: { cls: "bg-rose-500/30 text-rose-100 border-rose-500/60",          label: "Stop-out" },
+  };
+
+  // ALERT_STYLES (AIReviewPanel) == WARN_STYLES (PortfolioRiskPanel)
+  const SEVERITY_STYLES = {
+    info:     "border-line text-muted",
+    warning:  "border-amber-500/40 bg-amber-500/10 text-amber-200",
+    critical: "border-rose-500/50 bg-rose-500/15 text-rose-200",
+  };
+
+  // ThesisJournal STATUS
+  const THESIS_STATUS = {
+    on_track:    { cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40", icon: "circle-dot", label: "On track" },
+    target_hit:  { cls: "bg-sky-500/15 text-sky-300 border-sky-500/40",             icon: "target",     label: "Target hit" },
+    invalidated: { cls: "bg-rose-500/20 text-rose-200 border-rose-500/50",          icon: "shield-x",   label: "Invalidated" },
+    expiring:    { cls: "bg-amber-500/15 text-amber-300 border-amber-500/40",       icon: "clock",      label: "Expiring" },
+    expired:     { cls: "bg-slate-500/15 text-slate-300 border-slate-500/40",       icon: "clock",      label: "Expired" },
+  };
+  const thesisStatus = (t) => THESIS_STATUS[t.live_status] ?? THESIS_STATUS.on_track;
+
+  const THESIS_EMPTY = {
+    symbol: "", direction: "long", thesis: "", catalyst: "",
+    entry_price: "", invalidation_price: "", target_1: "", target_2: "",
+    horizon_days: "", conviction: 3,
+  };
+
+  // SectorPie colours + chart (Recharts Pie innerRadius 50 / outerRadius 90 / paddingAngle 2, no legend)
+  const SECTOR_COLORS = [
+    "#5EEAD4", "#60A5FA", "#A78BFA", "#F472B6",
+    "#F59E0B", "#22C55E", "#EF4444", "#8B95A7",
+  ];
+
+  function drawSectorPie(el, data) {
+    data = plain(data) || [];
+    if (!el || data.length === 0) return;
+    mountChart(el, {
+      type: "doughnut",
+      data: {
+        labels: data.map((d) => d.name),
+        datasets: [{
+          data: data.map((d) => d.value),
+          backgroundColor: data.map((_, i) => SECTOR_COLORS[i % SECTOR_COLORS.length]),
+          borderColor: "#0B0E14",
+          borderWidth: 1,
+          spacing: 2,
+        }],
+      },
+      options: {
+        maintainAspectRatio: false,
+        animation: false,
+        radius: 90,
+        cutout: 50,
+        plugins: {
+          legend: { display: false },
+          tooltip: { ...TOOLTIP, callbacks: { label: (c) => `${c.label}: ${(c.raw * 100).toFixed(1)}%` } },
+        },
+      },
+    }, 240);
+  }
+
+  // ---- page ----
+
+  function portfolioPage() {
+    return {
+      portfolios: null,
+      active: null,
+      detail: null,
+      err: null,
+      newName: "My portfolio",
+      rev: 0,
+      detailReq: 0,
+
+      async init() {
+        // useEffect([me, active]) -> refresh list; useEffect([active, rev]) -> load detail
+        this.$watch("active", () => { this.refresh(); this.loadDetail(); });
+        this.$watch("rev", () => this.loadDetail());
+        const me = await authReady();
+        if (!me) return;
+        await this.refresh();
+      },
+
+      get sectorData() {
+        if (!this.detail) return [];
+        return Object.entries(this.detail.sector_allocation || {}).map(([name, value]) => ({ name, value }));
+      },
+
+      async refresh() {
+        if (!Alpine.store("auth").me) return;
+        try {
+          const list = await authedFetch("/portfolios");
+          this.portfolios = list;
+          if (list.length && !this.active) this.active = list[0].id;
+        } catch (e) { this.err = errMsg(e); }
+      },
+
+      async loadDetail() {
+        if (!this.active) { this.detail = null; return; }
+        const req = ++this.detailReq;
+        try {
+          const d = await authedFetch(`/portfolios/${this.active}`);
+          if (req === this.detailReq) this.detail = d;
+        } catch (e) {
+          if (req === this.detailReq) this.err = errMsg(e);
+        }
+      },
+
+      async createPortfolio() {
+        try {
+          const r = await authedFetch("/portfolios", {
+            method: "POST",
+            body: JSON.stringify({ name: this.newName, base_currency: "USD" }),
+          });
+          this.portfolios = this.portfolios ? [...this.portfolios, r] : [r];
+          this.active = r.id;
+        } catch (e) { this.err = errMsg(e); }
+      },
+    };
+  }
+
+  // ---- child components (nested x-data; `detail` comes from the page scope) ----
+
+  function aiReviewPanel() {
+    return {
+      data: null,
+      loading: false,
+      err: null,
+
+      async review() {
+        this.loading = true;
+        this.err = null;
+        try {
+          this.data = await authedFetch(`/portfolios/${this.detail.id}/review`, { method: "POST" });
+        } catch (e) {
+          this.err = errMsg(e);
+        } finally {
+          this.loading = false;
+        }
+      },
+
+      // critical/sell first, then by absolute drawdown
+      get sorted() {
+        if (!this.data) return [];
+        const sev = (r) => (r.alerts.some((x) => x.severity === "critical") ? 2 : r.verdict === "SELL" || r.verdict === "TRIM" ? 1 : 0);
+        return [...this.data.reviews].sort((a, b) => {
+          const sevA = sev(a), sevB = sev(b);
+          if (sevA !== sevB) return sevB - sevA;
+          return a.unrealized_pl_pct - b.unrealized_pl_pct;
+        });
+      },
+
+      get allCritical() {
+        if (!this.data) return [];
+        return this.data.reviews.flatMap((r) => r.alerts.filter((a) => a.severity === "critical").map((a) => ({ sym: r.symbol, ...a })));
+      },
+    };
+  }
+
+  function portfolioRiskPanel() {
+    return {
+      data: null,
+      loading: false,
+      err: null,
+
+      async analyze() {
+        this.loading = true;
+        this.err = null;
+        try {
+          this.data = await authedFetch(`/portfolios/${this.detail.id}/risk`);
+        } catch (e) {
+          this.err = errMsg(e);
+        } finally {
+          this.loading = false;
+        }
+      },
+
+      // Drop the "Unknown" bucket — it only means the sector feed was unavailable.
+      get sectors() {
+        if (!this.data?.ok) return [];
+        return Object.entries(this.data.sector_weights).filter(([k]) => k !== "Unknown");
+      },
+      get maxSector() {
+        const s = this.sectors;
+        return s.length ? Math.max(...s.map(([, v]) => v)) : 1;
+      },
+      get sectorsUnknown() {
+        if (!this.data?.ok) return false;
+        return this.sectors.length === 0 && Object.keys(this.data.sector_weights).length > 0;
+      },
+    };
+  }
+
+  function transactionForm() {
+    return {
+      symbol: "AAPL",
+      side: "buy",
+      qty: "1",
+      price: "100",
+      fee: "0",
+      occurredAt: new Date().toISOString().slice(0, 10),
+      busy: false,
+      err: null,
+
+      async submit() {
+        this.busy = true;
+        this.err = null;
+        try {
+          await authedFetch(`/portfolios/${this.detail.id}/transactions`, {
+            method: "POST",
+            body: JSON.stringify({
+              symbol: this.symbol.toUpperCase(),
+              side: this.side,
+              quantity: this.qty,
+              price: this.price,
+              fee: this.fee,
+              occurred_at: new Date(this.occurredAt + "T00:00:00Z").toISOString(),
+            }),
+          });
+          this.rev++; // onAdded(): the page reloads the detail
+          this.symbol = "";
+          this.qty = "1";
+        } catch (e) {
+          this.err = errMsg(e);
+        } finally {
+          this.busy = false;
+        }
+      },
+    };
+  }
+
+  function aiAnalysisPanel() {
+    return {
+      data: null,
+      busy: false,
+      err: null,
+
+      async run() {
+        this.busy = true;
+        this.err = null;
+        try {
+          this.data = await authedFetch(`/portfolios/${this.detail.id}/ai-analysis`, { method: "POST" });
+        } catch (e) {
+          this.err = errMsg(e);
+        } finally {
+          this.busy = false;
+        }
+      },
+    };
+  }
+
+  function thesisJournal() {
+    return {
+      theses: null,
+      includeClosed: false,
+      showForm: false,
+      form: { ...THESIS_EMPTY },
+      err: null,
+      busy: false,
+
+      init() {
+        this.$watch("includeClosed", () => this.refresh());
+        this.refresh();
+      },
+
+      async refresh() {
+        try {
+          this.theses = await authedFetch(`/theses?include_closed=${this.includeClosed}`);
+        } catch (e) { this.err = errMsg(e); }
+      },
+
+      async create() {
+        const f = this.form;
+        if (!f.symbol.trim() || !f.thesis.trim()) { this.err = "Symbol and thesis are required."; return; }
+        this.busy = true;
+        this.err = null;
+        const num = (v) => (String(v).trim() === "" ? null : Number(v));
+        try {
+          await authedFetch("/theses", {
+            method: "POST",
+            body: JSON.stringify({
+              symbol: f.symbol.trim().toUpperCase(),
+              direction: f.direction,
+              thesis: f.thesis.trim(),
+              catalyst: f.catalyst.trim() || null,
+              entry_price: num(f.entry_price),
+              invalidation_price: num(f.invalidation_price),
+              target_1: num(f.target_1),
+              target_2: num(f.target_2),
+              horizon_days: String(f.horizon_days).trim() ? Number(f.horizon_days) : null,
+              conviction: f.conviction,
+            }),
+          });
+          this.form = { ...THESIS_EMPTY };
+          this.showForm = false;
+          await this.refresh();
+        } catch (e) { this.err = errMsg(e); }
+        finally { this.busy = false; }
+      },
+
+      async close(id) {
+        try {
+          await authedFetch(`/theses/${id}/close?reason=manual`, { method: "POST" });
+          await this.refresh();
+        } catch (e) { this.err = errMsg(e); }
+      },
+
+      async remove(id) {
+        try {
+          await authedFetch(`/theses/${id}`, { method: "DELETE" });
+          await this.refresh();
+        } catch (e) { this.err = errMsg(e); }
+      },
+    };
+  }
+</script>
+{% endblock %}

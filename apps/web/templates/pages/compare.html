@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+
+{# Port of app/compare/page.tsx + components/compare/NormalizedChart.tsx. #}
+
+{% block content %}
+<div x-data="comparePage()" class="p-6 space-y-6">
+  <div>
+    <h1 class="text-2xl font-semibold tracking-tight">Compare</h1>
+    <p class="text-sm text-muted mt-1">Side-by-side comparison: prices, returns, key stats, normalized chart.</p>
+  </div>
+
+  <div class="card p-4 flex flex-wrap items-center gap-2">
+    <template hidden x-for="s in symbols" :key="s">
+      <button @click="remove(s)"
+              class="pill border border-line text-text bg-surface2 inline-flex items-center gap-1 group">
+        <span class="font-mono" x-text="s"></span>
+        <i data-lucide="x" class="size-3 text-muted group-hover:text-danger"></i>
+      </button>
+    </template>
+    <form @submit.prevent="add()" class="flex items-center gap-2">
+      <input x-model="newSym"
+             placeholder="Add symbol" maxlength="20"
+             class="bg-surface2 border border-line rounded px-2 py-1 text-xs font-mono uppercase w-32">
+      <button class="rounded bg-accent text-bg px-2 py-1 text-xs inline-flex items-center gap-1">
+        <i data-lucide="plus" class="size-3"></i> Add
+      </button>
+    </form>
+    <template hidden x-if="err">
+      <span class="text-xs text-danger ml-2" x-text="err"></span>
+    </template>
+    <template hidden x-if="busy">
+      <span class="text-xs text-muted">loading…</span>
+    </template>
+  </div>
+
+  <template hidden x-if="loaded.length > 0">
+    <div class="space-y-6">
+      <div class="card">
+        <div class="card-header">Normalized price (1y, base 100)</div>
+        <div class="px-4 py-3" style="height: 360px">
+          <div class="h-full" x-effect="drawNormalized($el, loaded)"></div>
+        </div>
+      </div>
+
+      <div class="card overflow-x-auto">
+        <div class="card-header">Metrics</div>
+        <table class="w-full text-sm">
+          <thead class="text-xs uppercase tracking-wide text-muted border-b border-line">
+            <tr>
+              <th class="text-left px-4 py-2"></th>
+              <template hidden x-for="l in loaded" :key="l.symbol">
+                <th class="text-right px-4 py-2 font-mono">
+                  <a :href="'/stocks/' + l.symbol" class="hover:text-accent" x-text="l.symbol"></a>
+                </th>
+              </template>
+            </tr>
+          </thead>
+          <tbody>
+            <template hidden x-for="row in METRIC_ROWS" :key="row.label">
+              <tr class="border-b border-line/40 last:border-0">
+                <td class="px-4 py-2 text-xs uppercase tracking-wide text-muted" x-text="row.label"></td>
+                <template hidden x-for="l in loaded" :key="l.symbol">
+                  <td :class="cn('px-4 py-2 text-right', row.mono && 'tabular font-mono', row.cls && row.cls(l))" x-text="row.get(l)"></td>
+                </template>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </template>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function oneYearReturn(l) {
+    const b = l.bars;
+    if (b.length < 2) return null;
+    return (b[b.length - 1].close / b[0].close - 1) * 100;
+  }
+
+  // MetricRow list from compare/page.tsx
+  const METRIC_ROWS = [
+    { label: "Name", get: (l) => l.detail.profile.name ?? "—" },
+    { label: "Sector", get: (l) => l.detail.profile.sector ?? "—" },
+    { label: "Price", get: (l) => fmtNumber(l.detail.quote.price), mono: true },
+    { label: "Change %", get: (l) => fmtPct(l.detail.quote.change_pct), cls: (l) => changeColor(l.detail.quote.change_pct), mono: true },
+    { label: "Market cap", get: (l) => (l.detail.profile.market_cap ? `$${fmtCompact(l.detail.profile.market_cap)}` : "—"), mono: true },
+    { label: "P/E", get: (l) => fmtNumber(l.detail.key_stats.pe), mono: true },
+    { label: "Forward P/E", get: (l) => fmtNumber(l.detail.key_stats.forward_pe), mono: true },
+    { label: "EPS", get: (l) => fmtNumber(l.detail.key_stats.eps), mono: true },
+    { label: "Beta", get: (l) => fmtNumber(l.detail.key_stats.beta), mono: true },
+    { label: "52w high", get: (l) => fmtNumber(l.detail.key_stats.fifty_two_week_high), mono: true },
+    { label: "52w low", get: (l) => fmtNumber(l.detail.key_stats.fifty_two_week_low), mono: true },
+    { label: "Avg volume", get: (l) => fmtCompact(l.detail.key_stats.avg_volume), mono: true },
+    {
+      label: "1y return",
+      get: (l) => { const r = oneYearReturn(l); return r == null ? "—" : fmtPct(r); },
+      cls: (l) => { const r = oneYearReturn(l); return r == null ? "" : changeColor(r); },
+      mono: true,
+    },
+  ];
+
+  // NormalizedChart: each series rebased so its first bar = 100, aligned on the shortest series.
+  const NORMALIZED_COLORS = ["#5EEAD4", "#60A5FA", "#A78BFA", "#F472B6"];
+
+  function drawNormalized(el, loaded) {
+    const aligned = (plain(loaded) || []).filter((l) => l.bars.length > 0);
+    if (aligned.length === 0) {
+      // the React component rendered nothing
+      if (el._chart) { el._chart.destroy(); el._chart = null; }
+      el.innerHTML = "";
+      return;
+    }
+    const minLen = Math.min(...aligned.map((s) => s.bars.length));
+    const ref = aligned[0].bars;
+    const xs = [];
+    for (let i = 0; i < minLen; i++) xs.push(ref[ref.length - minLen + i].ts.slice(0, 10));
+    const series = aligned.map((s, i) => {
+      const bars = s.bars;
+      const first = bars[bars.length - minLen].close;
+      return {
+        label: s.symbol,
+        color: NORMALIZED_COLORS[i % NORMALIZED_COLORS.length],
+        data: xs.map((x, j) => ({ x, y: (bars[bars.length - minLen + j].close / first) * 100 })),
+      };
+    });
+    lineChart(el, series, { height: el.clientHeight || 336 });
+  }
+
+  function comparePage() {
+    return {
+      symbols: ["AAPL", "MSFT", "NVDA"],
+      loaded: [],
+      newSym: "",
+      err: null,
+      busy: false,
+      req: 0,
+
+      init() {
+        // useEffect([symbols.join(",")])
+        this.$watch("symbols.join(',')", () => this.load());
+        this.load();
+      },
+
+      load() {
+        const req = ++this.req;
+        this.busy = true;
+        this.err = null;
+        Promise.all(this.symbols.map(async (s) => {
+          try {
+            const [detail, hist] = await Promise.all([api.detail(s), api.history(s, "1d", "1y")]);
+            return { symbol: s, detail, bars: hist.bars };
+          } catch { return null; }
+        })).then((rs) => {
+          if (req !== this.req) return;
+          this.loaded = rs.filter(Boolean);
+          this.busy = false;
+        });
+      },
+
+      add() {
+        const s = this.newSym.trim().toUpperCase();
+        if (!s) return;
+        if (this.symbols.length >= 4) { this.err = "Max 4 symbols for comparison"; return; }
+        if (this.symbols.includes(s)) { this.err = "Already added"; return; }
+        this.err = null;
+        this.symbols = [...this.symbols, s];
+        this.newSym = "";
+      },
+
+      remove(s) {
+        this.symbols = this.symbols.filter((x) => x !== s);
+      },
+    };
+  }
+</script>
+{% endblock %}

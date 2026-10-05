@@ -1,0 +1,376 @@
+{% extends "base.html" %}
+{% from "partials/macros.html" import confirm_dialog %}
+
+{#
+  Port of app/watchlists/page.tsx + components/pro/TriggersPanel.tsx
+  (+ components/ui/ConfirmDialog.tsx via the confirm_dialog macro).
+#}
+
+{% set INP = "w-full bg-surface2 border border-line rounded px-2 py-1.5 text-sm" %}
+
+{% block content %}
+<div x-data="watchlistsPage()">
+  <div x-show="!$store.auth.ready" class="p-6 text-sm text-muted">Loading…</div>
+
+  <template hidden x-if="$store.auth.ready && !$store.auth.me">
+    <div class="p-6">
+      <div class="card p-8 text-sm">
+        <a class="text-accent" href="/login">Sign in</a> to manage watchlists.
+      </div>
+    </div>
+  </template>
+
+  <template hidden x-if="$store.auth.ready && $store.auth.me">
+    <div class="p-6 space-y-6">
+      <div class="flex items-end justify-between flex-wrap gap-3">
+        <div>
+          <h1 class="text-2xl font-semibold tracking-tight">Watchlists</h1>
+          <p class="text-sm text-muted mt-1">Track price + change across multiple symbols.</p>
+        </div>
+        <form @submit.prevent="create()" class="flex items-center gap-2">
+          <input x-model="newName"
+                 class="bg-surface2 border border-line rounded px-2 py-1 text-sm" placeholder="Name">
+          <button class="rounded bg-accent text-bg font-medium px-3 py-1 text-sm inline-flex items-center gap-1">
+            <i data-lucide="plus" class="size-4"></i> New
+          </button>
+        </form>
+      </div>
+
+      <template hidden x-if="err">
+        <div class="card p-3 text-sm text-danger break-all" x-text="err"></div>
+      </template>
+
+      <template hidden x-if="watchlists && watchlists.length > 0">
+        <div class="flex flex-wrap gap-2">
+          <template hidden x-for="w in watchlists" :key="w.id">
+            <button @click="activeId = w.id"
+                    :class="cn('pill border', activeId === w.id ? 'border-accent text-accent bg-accent/10' : 'border-line text-muted hover:text-text')">
+              <span x-text="w.name"></span> <span class="text-muted ml-1" x-text="`(${w.symbols.length})`"></span>
+            </button>
+          </template>
+        </div>
+      </template>
+
+      <template hidden x-if="active">
+        <div class="space-y-6">
+          <form @submit.prevent="addSymbol()" class="flex items-center gap-2 max-w-md">
+            <input x-model="newSym"
+                   placeholder="Add symbol (e.g. AAPL)" maxlength="20"
+                   class="flex-1 bg-surface2 border border-line rounded px-3 py-1.5 text-sm font-mono uppercase">
+            <button class="rounded bg-accent text-bg font-medium px-3 py-1.5 text-sm">Add</button>
+          </form>
+
+          <div class="card overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="text-xs uppercase tracking-wide text-muted border-b border-line">
+                <tr>
+                  <th class="text-left px-4 py-2">Symbol</th>
+                  <th class="text-left px-4 py-2">Name</th>
+                  <th class="text-right px-4 py-2">Price</th>
+                  <th class="text-right px-4 py-2">Change %</th>
+                  <th class="w-12 px-2 py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <template hidden x-if="active.symbols.length === 0">
+                  <tr><td colspan="5" class="px-4 py-4 text-muted text-sm">No symbols yet.</td></tr>
+                </template>
+                <template hidden x-for="s in active.symbols" :key="s">
+                  <tr class="border-b border-line last:border-0 hover:bg-surface2">
+                    <td class="px-4 py-2 font-mono">
+                      <a :href="'/stocks/' + s" class="hover:text-accent" x-text="s"></a>
+                    </td>
+                    <td class="px-4 py-2 text-muted truncate max-w-[24ch]" x-text="quotes[s]?.name ?? '—'"></td>
+                    <td class="px-4 py-2 text-right tabular" x-text="quotes[s] ? fmtNumber(quotes[s].price) : '…'"></td>
+                    <td :class="cn('px-4 py-2 text-right tabular', changeColor(quotes[s]?.change_pct))"
+                        x-text="quotes[s] ? fmtPct(quotes[s].change_pct) : '…'"></td>
+                    <td class="px-2 py-2 text-right">
+                      <button @click="pendingRemove = s" class="text-muted hover:text-danger p-1" title="Remove">
+                        <i data-lucide="x" class="size-3.5"></i>
+                      </button>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </template>
+
+      <div class="pt-2">
+        <h2 class="text-lg font-semibold tracking-tight mb-1">Entry triggers</h2>
+        <p class="text-sm text-muted mb-3">Get alerted when a symbol hits the level you're waiting for — across all watchlists.</p>
+
+        <!-- ================= TriggersPanel ================= -->
+        <div x-data="triggersPanel()" class="space-y-3">
+          <div class="card p-3 flex items-center gap-3 flex-wrap">
+            <i data-lucide="crosshair" class="size-5 text-accent"></i>
+            <div class="flex-1 min-w-[12rem]">
+              <div class="text-sm font-medium">Entry triggers</div>
+              <div class="text-xs text-muted">
+                Wait for the setup instead of chasing. Background scanner fires a notification when your condition is met (re-arms after 12h).
+              </div>
+            </div>
+            <button @click="showForm = !showForm"
+                    class="rounded bg-accent text-bg font-medium px-3 py-1.5 text-sm inline-flex items-center gap-1">
+              <i data-lucide="plus" class="size-4"></i> New trigger
+            </button>
+          </div>
+
+          <template hidden x-if="err">
+            <div class="card p-2 text-xs text-danger break-all" x-text="err"></div>
+          </template>
+
+          <template hidden x-if="showForm">
+            <form @submit.prevent="create()" class="card p-4 space-y-3">
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+                <label class="block">
+                  <span class="text-[11px] text-muted block mb-0.5">Symbol</span>
+                  <input x-model="form.symbol"
+                         class="{{ INP }} font-mono uppercase" placeholder="NVDA" maxlength="20">
+                </label>
+                <label class="block">
+                  <span class="text-[11px] text-muted block mb-0.5">Condition</span>
+                  <select x-model="form.condition" class="{{ INP }}">
+                    <option value="price_below">Price ≤</option>
+                    <option value="price_above">Price ≥</option>
+                    <option value="pct_change_day">% day move</option>
+                    <option value="rsi_below">RSI ≤</option>
+                    <option value="rsi_above">RSI ≥</option>
+                    <option value="breakout_volume">Breakout +vol</option>
+                  </select>
+                </label>
+                <label class="block">
+                  <span class="text-[11px] text-muted block mb-0.5">Threshold</span>
+                  <input x-model="form.threshold"
+                         class="{{ INP }}" inputmode="decimal" placeholder="e.g. 120">
+                </label>
+                <label class="block">
+                  <span class="text-[11px] text-muted block mb-0.5">Note (optional)</span>
+                  <input x-model="form.note" class="{{ INP }}" placeholder="why this level">
+                </label>
+              </div>
+              <template hidden x-if="hint">
+                <div class="text-[11px] text-muted" x-text="`↳ ${hint}`"></div>
+              </template>
+              <div class="flex items-center gap-2">
+                <button :disabled="busy" class="rounded bg-accent text-bg font-medium px-4 py-1.5 text-sm disabled:opacity-50"
+                        x-text="busy ? 'Saving…' : 'Arm trigger'"></button>
+                <button type="button" @click="showForm = false" class="text-xs text-muted hover:text-text">Cancel</button>
+              </div>
+            </form>
+          </template>
+
+          <template hidden x-if="rows === null">
+            <div class="card p-4 text-sm text-muted">Loading…</div>
+          </template>
+          <template hidden x-if="rows !== null && rows.length === 0">
+            <div class="card p-6 text-sm text-muted text-center">
+              No triggers armed. Set one so the platform watches your levels around the clock.
+            </div>
+          </template>
+          <template hidden x-if="rows !== null && rows.length > 0">
+            <div class="card overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead class="text-xs uppercase tracking-wide text-muted border-b border-line">
+                  <tr>
+                    <th class="text-left px-4 py-2">Symbol</th>
+                    <th class="text-left px-4 py-2">Condition</th>
+                    <th class="text-right px-4 py-2">Threshold</th>
+                    <th class="text-left px-4 py-2">Note</th>
+                    <th class="text-right px-4 py-2">Fired</th>
+                    <th class="w-10 px-2 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template hidden x-for="t in rows" :key="t.id">
+                    <tr class="border-b border-line last:border-0 hover:bg-surface2">
+                      <td class="px-4 py-2 font-mono">
+                        <a :href="'/stocks/' + t.symbol" class="hover:text-accent" x-text="t.symbol"></a>
+                      </td>
+                      <td class="px-4 py-2" x-text="condLabel(t.condition)"></td>
+                      <td class="px-4 py-2 text-right tabular" x-text="t.threshold"></td>
+                      <td class="px-4 py-2 text-muted truncate max-w-[20ch]" x-text="t.note ?? '—'"></td>
+                      <td class="px-4 py-2 text-right tabular">
+                        <span x-show="t.fire_count > 0" class="inline-flex items-center gap-1 text-amber-300"><i data-lucide="zap" class="size-3"></i><span x-text="t.fire_count"></span></span>
+                        <span x-show="!(t.fire_count > 0)" class="text-muted">—</span>
+                      </td>
+                      <td class="px-2 py-2 text-right">
+                        <button @click="remove(t.id)" class="text-muted hover:text-danger p-1" title="Delete">
+                          <i data-lucide="x" class="size-3.5"></i>
+                        </button>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      {{ confirm_dialog("removeOpen", "'Remove from watchlist'", "removeMessage", "confirmRemove()", confirm_label="Remove", destructive=True) }}
+    </div>
+  </template>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const TRIGGER_CONDITIONS = [
+    { value: "price_below",     label: "Price ≤",       hint: "alert when price falls to your level" },
+    { value: "price_above",     label: "Price ≥",       hint: "alert when price rises to your level" },
+    { value: "pct_change_day",  label: "% day move",    hint: "negative = drop, positive = spike" },
+    { value: "rsi_below",       label: "RSI ≤",         hint: "oversold entry (e.g. 30)" },
+    { value: "rsi_above",       label: "RSI ≥",         hint: "overbought (e.g. 70)" },
+    { value: "breakout_volume", label: "Breakout +vol", hint: "price ≥ level confirmed by volume spike" },
+  ];
+
+  function condLabel(c) {
+    return TRIGGER_CONDITIONS.find((x) => x.value === c)?.label ?? c;
+  }
+
+  function watchlistsPage() {
+    return {
+      watchlists: null,
+      activeId: null,
+      quotes: {},
+      newName: "My watchlist",
+      newSym: "",
+      err: null,
+      pendingRemove: null,
+      quotesReq: 0,
+
+      async init() {
+        // useEffect([watchlists, activeId]) -> fetch quotes for the active list
+        this.$watch("watchlists", () => this.loadQuotes());
+        this.$watch("activeId", () => { this.refresh(); this.loadQuotes(); });
+        const me = await authReady();
+        if (!me) return;
+        await this.refresh();
+      },
+
+      get active() {
+        return this.watchlists?.find((w) => w.id === this.activeId);
+      },
+
+      // ConfirmDialog: open while a symbol is pending; closing clears it (onCancel)
+      get removeOpen() {
+        return !!this.pendingRemove;
+      },
+      set removeOpen(v) {
+        if (!v) this.pendingRemove = null;
+      },
+      get removeMessage() {
+        return `Remove ${this.pendingRemove ?? ""} from "${this.active?.name}"?`;
+      },
+
+      async refresh() {
+        if (!Alpine.store("auth").me) return;
+        try {
+          const list = await authedFetch("/watchlists");
+          this.watchlists = list;
+          if (list.length && !this.activeId) this.activeId = list[0].id;
+        } catch (e) { this.err = errMsg(e); }
+      },
+
+      loadQuotes() {
+        const wl = this.watchlists?.find((w) => w.id === this.activeId);
+        if (!wl) return;
+        const req = ++this.quotesReq;
+        Promise.all(wl.symbols.map(async (s) => {
+          try {
+            const d = await api.detail(s);
+            return { symbol: s, name: d.profile.name, price: d.quote.price, change_pct: d.quote.change_pct };
+          } catch { return null; }
+        })).then((rs) => {
+          if (req !== this.quotesReq) return;
+          const m = {};
+          for (const q of rs) if (q) m[q.symbol] = q;
+          this.quotes = m;
+        });
+      },
+
+      async create() {
+        try {
+          const w = await authedFetch("/watchlists", { method: "POST", body: JSON.stringify({ name: this.newName }) });
+          this.watchlists = this.watchlists ? [...this.watchlists, w] : [w];
+          this.activeId = w.id;
+          this.newName = "My watchlist";
+        } catch (e) { this.err = errMsg(e); }
+      },
+
+      async addSymbol() {
+        if (!this.activeId || !this.newSym.trim()) return;
+        try {
+          await authedFetch(`/watchlists/${this.activeId}/items`, {
+            method: "POST", body: JSON.stringify({ symbol: this.newSym.trim().toUpperCase() }),
+          });
+          this.newSym = "";
+          await this.refresh();
+        } catch (e) { this.err = errMsg(e); }
+      },
+
+      async confirmRemove() {
+        if (!this.activeId || !this.pendingRemove) return;
+        try {
+          await authedFetch(`/watchlists/${this.activeId}/items/${this.pendingRemove}`, { method: "DELETE" });
+          await this.refresh();
+        } catch (e) { this.err = errMsg(e); }
+        finally { this.pendingRemove = null; }
+      },
+    };
+  }
+
+  // TriggersPanel (nested x-data; its own err/busy/form shadow the page's)
+  function triggersPanel() {
+    return {
+      rows: null,
+      showForm: false,
+      form: { symbol: "", condition: "price_below", threshold: "", note: "" },
+      err: null,
+      busy: false,
+
+      init() {
+        this.loadRows();
+      },
+
+      get hint() {
+        return TRIGGER_CONDITIONS.find((c) => c.value === this.form.condition)?.hint;
+      },
+
+      async loadRows() {
+        try { this.rows = await authedFetch("/triggers"); }
+        catch (e) { this.err = errMsg(e); }
+      },
+
+      async create() {
+        const f = this.form;
+        if (!f.symbol.trim() || f.threshold.trim() === "") { this.err = "Symbol and threshold are required."; return; }
+        this.busy = true;
+        this.err = null;
+        try {
+          await authedFetch("/triggers", {
+            method: "POST",
+            body: JSON.stringify({
+              symbol: f.symbol.trim().toUpperCase(),
+              condition: f.condition,
+              threshold: Number(f.threshold),
+              note: f.note.trim() || null,
+            }),
+          });
+          this.form = { symbol: "", condition: "price_below", threshold: "", note: "" };
+          this.showForm = false;
+          await this.loadRows();
+        } catch (e) { this.err = errMsg(e); }
+        finally { this.busy = false; }
+      },
+
+      async remove(id) {
+        try { await authedFetch(`/triggers/${id}`, { method: "DELETE" }); await this.loadRows(); }
+        catch (e) { this.err = errMsg(e); }
+      },
+    };
+  }
+</script>
+{% endblock %}

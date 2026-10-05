@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+
+{# Port of app/settings/page.tsx (profile, TOTP 2FA enrolment, sign out). #}
+
+{% block content %}
+<div x-data="settingsPage()">
+  <div x-show="!$store.auth.ready" class="p-6 text-sm text-muted">Loading…</div>
+
+  <template hidden x-if="$store.auth.ready && !$store.auth.me">
+    <div class="p-6">
+      <div class="card p-8 text-sm">
+        <a class="text-accent" href="/login">Sign in</a> to manage settings.
+      </div>
+    </div>
+  </template>
+
+  <template hidden x-if="$store.auth.ready && $store.auth.me">
+    <div class="p-6 space-y-6 max-w-2xl">
+      <div>
+        <h1 class="text-2xl font-semibold tracking-tight">Settings</h1>
+        <p class="text-sm text-muted mt-1">Account, security, and session.</p>
+      </div>
+
+      <div class="card p-4 space-y-2">
+        <div class="text-sm font-medium">Profile</div>
+        <div class="text-sm grid grid-cols-3 gap-2 text-muted">
+          <div>Email</div><div class="col-span-2 text-text" x-text="meInfo?.email ?? $store.auth.me.email"></div>
+          <div>Display name</div><div class="col-span-2 text-text" x-text="meInfo?.display_name ?? $store.auth.me.display_name ?? '—'"></div>
+          <div>Role</div><div class="col-span-2 text-text" x-text="meInfo?.role ?? $store.auth.me.role"></div>
+        </div>
+      </div>
+
+      <div class="card p-4 space-y-3">
+        <div class="text-sm font-medium">Two-factor authentication</div>
+
+        <template hidden x-if="meInfo?.totp_enabled">
+          <div class="space-y-3">
+            <p class="text-sm text-success">2FA is enabled.</p>
+            <div class="text-xs text-muted">Enter a current TOTP code to disable.</div>
+            <div class="flex gap-2">
+              <input x-model="code" placeholder="123456"
+                     class="bg-surface2 border border-line rounded px-2 py-1 text-sm font-mono w-32 tabular">
+              <button @click="disable2fa()" class="rounded bg-danger/20 border border-danger/40 text-danger px-3 py-1 text-sm">Disable</button>
+            </div>
+          </div>
+        </template>
+
+        <template hidden x-if="!meInfo?.totp_enabled && otpauth">
+          <div class="space-y-3">
+            <p class="text-sm text-muted">
+              Scan the QR code in your authenticator app, or enter the secret manually.
+              Then verify with a code below.
+            </p>
+            <img :src="`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(otpauth)}`"
+                 alt="2FA QR code" class="rounded bg-white p-1">
+            <div class="text-xs text-muted">
+              Manual secret: <span class="font-mono text-text" x-text="secret"></span>
+            </div>
+            <div class="flex gap-2">
+              <input x-model="code" placeholder="123456"
+                     class="bg-surface2 border border-line rounded px-2 py-1 text-sm font-mono w-32 tabular">
+              <button @click="verify2fa()" class="rounded bg-accent text-bg font-medium px-3 py-1 text-sm">Verify &amp; enable</button>
+            </div>
+          </div>
+        </template>
+
+        <template hidden x-if="!meInfo?.totp_enabled && !otpauth">
+          <button @click="setup2fa()" class="rounded bg-accent text-bg font-medium px-3 py-1 text-sm">Set up 2FA</button>
+        </template>
+
+        <template hidden x-if="msg">
+          <p class="text-sm text-success" x-text="msg"></p>
+        </template>
+        <template hidden x-if="err">
+          <p class="text-sm text-danger break-all" x-text="err"></p>
+        </template>
+      </div>
+
+      <div class="card p-4 space-y-2">
+        <div class="text-sm font-medium">Session</div>
+        <button @click="$store.auth.logout()" class="rounded border border-line px-3 py-1 text-sm text-muted hover:text-text">Sign out</button>
+      </div>
+    </div>
+  </template>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function settingsPage() {
+    return {
+      meInfo: null,
+      otpauth: null,
+      secret: null,
+      code: "",
+      msg: null,
+      err: null,
+
+      async init() {
+        const me = await authReady();
+        if (!me) return;
+        authedFetch("/auth/me").then((r) => (this.meInfo = r)).catch(() => {});
+      },
+
+      async setup2fa() {
+        this.err = null;
+        this.msg = null;
+        try {
+          const r = await authedFetch("/auth/2fa/setup", { method: "POST" });
+          this.otpauth = r.otpauth_url;
+          this.secret = r.secret;
+        } catch (e) { this.err = errMsg(e); }
+      },
+
+      async verify2fa() {
+        this.err = null;
+        this.msg = null;
+        try {
+          await authedFetch("/auth/2fa/verify", { method: "POST", body: JSON.stringify({ code: this.code }) });
+          this.msg = "2FA enabled. You'll be asked for a code on next sign-in.";
+          this.otpauth = null;
+          this.secret = null;
+          this.code = "";
+          this.meInfo = await authedFetch("/auth/me");
+        } catch (e) { this.err = errMsg(e); }
+      },
+
+      async disable2fa() {
+        this.err = null;
+        this.msg = null;
+        try {
+          await authedFetch("/auth/2fa/disable", { method: "POST", body: JSON.stringify({ code: this.code }) });
+          this.msg = "2FA disabled.";
+          this.code = "";
+          this.meInfo = await authedFetch("/auth/me");
+        } catch (e) { this.err = errMsg(e); }
+      },
+    };
+  }
+</script>
+{% endblock %}
