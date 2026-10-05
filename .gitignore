@@ -18,3 +18,9 @@ htmlcov
 .ruff_cache
 mlruns
 artifacts
+
+# local data and state (never commit)
+*.db
+*.db.bak*
+*.sqlite
+.claude/
