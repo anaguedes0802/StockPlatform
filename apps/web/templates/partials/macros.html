@@ -1,0 +1,81 @@
+{#
+  Reusable HTML pieces. Each macro takes the NAME of a JavaScript value in the
+  surrounding Alpine component (e.g. regime_banner("regime")) and binds to it.
+#}
+
+{# Market regime banner: risk-off ← gauge → risk-on, with component chips. #}
+{% macro regime_banner(data) -%}
+<section x-data="{ get d() { return {{ data }} }, get S() { return REGIME_STYLES[this.d.regime] ?? REGIME_STYLES.neutral } }"
+         :class="cn('card p-4 border', S.cls)">
+  <div class="flex items-start gap-3 flex-wrap">
+    <span class="shrink-0 mt-0.5 text-text">
+      <span x-show="d.regime === 'risk_on'"><i data-lucide="shield-check" class="size-6"></i></span>
+      <span x-show="d.regime === 'risk_off'"><i data-lucide="shield-x" class="size-6"></i></span>
+      <span x-show="d.regime !== 'risk_on' && d.regime !== 'risk_off'"><i data-lucide="shield-alert" class="size-6"></i></span>
+    </span>
+    <div class="flex-1 min-w-[16rem]">
+      <div class="flex items-center gap-2 flex-wrap">
+        <span class="text-xs uppercase tracking-wide text-muted flex items-center gap-1">
+          <i data-lucide="gauge" class="size-3"></i> Market regime
+        </span>
+        <span class="text-sm font-semibold text-text" x-text="S.label"></span>
+        <span class="text-xs text-muted tabular" x-text="`score ${d.score > 0 ? '+' : ''}${d.score} · size ×${d.position_sizing_mult}`"></span>
+      </div>
+      <p class="text-sm text-text mt-1" x-text="d.headline"></p>
+      <p class="text-xs text-muted mt-0.5" x-text="d.playbook"></p>
+      <!-- gauge bar: risk-off (left) → risk-on (right); score [-100,100] → 0-100% -->
+      <div class="mt-2 h-1.5 rounded bg-surface2 overflow-hidden relative">
+        <div :class="cn('h-full rounded', S.bar)" :style="`width: ${Math.round(((d.score + 100) / 200) * 100)}%`"></div>
+      </div>
+      <div class="flex justify-between text-[9px] text-muted mt-0.5">
+        <span>risk-off</span><span>neutral</span><span>risk-on</span>
+      </div>
+    </div>
+  </div>
+  <div x-show="d.components.length > 0" class="flex flex-wrap gap-1.5 mt-3">
+    <template x-for="c in d.components" :key="c.name">
+      <span :title="c.detail" :class="cn('pill border text-[11px] inline-flex items-center gap-1', regimeChipColor(c.score))">
+        <span x-text="c.name"></span>
+        <span class="tabular opacity-70" x-text="`${c.score > 0 ? '+' : ''}${c.score.toFixed(2)}`"></span>
+      </span>
+    </template>
+  </div>
+</section>
+{%- endmacro %}
+
+{#
+  Confirmation modal. `open` is the name of a boolean in the component;
+  `on_confirm` is a JS statement run on confirm.
+#}
+{% macro confirm_dialog(open, title, message, on_confirm, confirm_label="Confirm", cancel_label="Cancel", destructive=False) -%}
+<div x-show="{{ open }}" x-cloak @keydown.escape.window="{{ open }} = false"
+     class="fixed inset-0 z-50 grid place-items-center bg-black/60 backdrop-blur-sm" @click="{{ open }} = false">
+  <div class="card w-full max-w-sm" @click.stop>
+    <div class="card-header flex items-center gap-2">
+      {% if destructive %}<i data-lucide="alert-triangle" class="size-4 text-danger"></i>{% endif %}
+      <span class="text-text font-medium" x-text="{{ title }}"></span>
+      <button @click="{{ open }} = false" class="ml-auto text-muted hover:text-text"><i data-lucide="x" class="size-4"></i></button>
+    </div>
+    <p class="px-4 py-3 text-sm text-muted" x-text="{{ message }}"></p>
+    <div class="px-4 pb-4 flex items-center justify-end gap-2">
+      <button @click="{{ open }} = false" class="px-3 py-1.5 text-sm rounded border border-line text-muted hover:text-text">{{ cancel_label }}</button>
+      <button @click="{{ on_confirm }}"
+              class="px-3 py-1.5 text-sm rounded font-medium {{ 'bg-danger/20 border border-danger/40 text-danger hover:bg-danger/30' if destructive else 'bg-accent text-bg hover:bg-accentDark' }}">{{ confirm_label }}</button>
+    </div>
+  </div>
+</div>
+{%- endmacro %}
+
+{# Strategy-vs-benchmark equity chart container; call equityChart(this.$refs[ref], ...) to draw. #}
+{% macro equity_chart(ref, height=320) -%}
+<div x-ref="{{ ref }}" style="height: {{ height }}px"></div>
+{%- endmacro %}
+
+{# Labelled text input bound to `model` (a variable name in the component). #}
+{% macro field(label, model, type="text", required=True, autofocus=False) -%}
+<label class="block">
+  <span class="block text-xs text-muted mb-1">{{ label }}</span>
+  <input type="{{ type }}" x-model="{{ model }}" {% if required %}required{% endif %} {% if autofocus %}autofocus{% endif %}
+         class="w-full bg-surface2 border border-line rounded-md px-3 py-2 text-sm focus:outline-none focus:border-accent/60">
+</label>
+{%- endmacro %}

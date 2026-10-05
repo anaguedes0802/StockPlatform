@@ -1,0 +1,41 @@
+{% set path = request.url.path %}
+
+{% macro nav_link(item, path) -%}
+{% set active = item.is_active(path) %}
+<a href="{{ item.href }}"
+   {% if item.match == "/stocks/" %}:href="'/stocks/' + encodeURIComponent(lastSymbol)"{% endif %}
+   title="{{ item.hint }}" {% if active %}aria-current="page"{% endif %}
+   class="relative flex items-center gap-3 px-3 py-1.5 rounded-md text-sm transition-colors {{ 'bg-surface2 text-text' if active else 'text-muted hover:text-text hover:bg-surface2/60' }}">
+  {% if active %}<span class="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-accent"></span>{% endif %}
+  <i data-lucide="{{ item.icon }}" class="size-4 shrink-0 {{ 'text-accent' if active }}"></i>
+  <span class="truncate">{{ item.label }}</span>
+</a>
+{%- endmacro %}
+
+<aside x-data="sidebar()" class="hidden md:flex flex-col w-60 shrink-0 border-r border-line bg-surface">
+  <div class="px-4 py-4 flex items-center justify-between gap-2">
+    <a href="/dashboard" class="flex items-center gap-2">
+      <div class="size-7 rounded-md bg-accent/20 grid place-items-center">
+        <i data-lucide="sparkles" class="size-4 text-accent"></i>
+      </div>
+      <div class="font-semibold tracking-tight">StockPlatform</div>
+    </a>
+    {% include "partials/notifications_bell.html" %}
+  </div>
+  <nav class="flex-1 overflow-y-auto px-2 pb-3 space-y-4">
+    {% for group in nav_groups %}
+    <div>
+      {% if group.title %}
+      <div class="px-3 pb-1 text-[11px] font-medium uppercase tracking-wider text-muted/70">{{ group.title }}</div>
+      {% endif %}
+      <div class="space-y-0.5">
+        {% for item in group.items %}{{ nav_link(item, path) }}{% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </nav>
+  <div class="px-2 py-2 border-t border-line space-y-0.5">
+    {% for item in footer_items %}{{ nav_link(item, path) }}{% endfor %}
+    <div class="px-3 pt-1 text-[11px] text-muted/70">v0.1 · informational only</div>
+  </div>
+</aside>

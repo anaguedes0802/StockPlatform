@@ -1,0 +1,52 @@
+<div x-data="notificationsBell()" x-show="$store.auth.ready && $store.auth.me" x-cloak
+     class="relative" @mousedown.outside="open = false">
+  <button @click="open = !open" class="relative p-1.5 rounded-md hover:bg-surface2 transition-colors" title="Notifications">
+    <i data-lucide="bell" class="size-4 text-muted"></i>
+    <span x-show="unread > 0" x-text="unread > 9 ? '9+' : unread"
+          class="absolute -top-0.5 -right-0.5 size-4 rounded-full bg-rose-500 text-[10px] font-semibold text-white grid place-items-center"></span>
+  </button>
+
+  <div x-show="open" x-cloak
+       class="absolute right-0 mt-2 w-96 max-h-[70vh] overflow-hidden rounded-lg border border-line bg-surface shadow-xl z-50 flex flex-col">
+    <div class="px-3 py-2 flex items-center gap-2 border-b border-line">
+      <i data-lucide="bell" class="size-3.5 text-muted"></i>
+      <div class="text-sm font-medium">Notifications</div>
+      <div class="ml-auto flex items-center gap-1">
+        <button @click="scan()" :disabled="scanning"
+                class="text-[11px] text-muted hover:text-text disabled:opacity-50 inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-surface2"
+                title="Scan now — runs rising-stars/portfolio/watchlist scanners">
+          <span class="inline-flex" :class="scanning && 'animate-spin'"><i data-lucide="refresh-cw" class="size-3"></i></span>
+          Scan
+        </button>
+        <button x-show="unread > 0" @click="markAllRead()"
+                class="text-[11px] text-muted hover:text-text px-1.5 py-0.5 rounded hover:bg-surface2">Mark read</button>
+      </div>
+    </div>
+
+    <div class="overflow-y-auto flex-1">
+      <div x-show="items === null" class="p-4 text-xs text-muted">Loading…</div>
+      <div x-show="items !== null && items.length === 0" class="p-6 text-center text-xs text-muted">
+        Nothing yet. Click <span class="text-text">Scan</span> to look for rising stars, portfolio alerts, watchlist surges.
+      </div>
+      <template x-for="n in (items || [])" :key="n.id">
+        <div @click="markRead(n.id)"
+             :class="cn('px-3 py-2 border-b border-line/40 hover:bg-surface2/50 cursor-pointer', !n.read_at && 'bg-surface2/30')">
+          <div class="flex items-start gap-2">
+            <span :class="cn('mt-1.5 size-2 rounded-full shrink-0', SEV_DOT[n.severity])"></span>
+            <div class="flex-1 min-w-0">
+              <div class="text-sm text-text truncate" x-text="n.title"></div>
+              <div x-show="n.body" class="text-xs text-muted mt-0.5 line-clamp-2" x-text="n.body"></div>
+              <div class="flex items-center gap-2 mt-1">
+                <span class="text-[10px] uppercase tracking-wide text-muted" x-text="n.kind.replace(/_/g, ' ')"></span>
+                <span class="text-[10px] text-muted">·</span>
+                <span class="text-[10px] text-muted" x-text="relativeTime(n.created_at)"></span>
+                <a x-show="n.symbol" :href="'/stocks/' + n.symbol" @click.stop
+                   class="ml-auto text-[10px] text-accent hover:underline">open →</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>

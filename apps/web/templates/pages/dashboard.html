@@ -1,0 +1,269 @@
+{% extends "base.html" %}
+{% from "partials/macros.html" import regime_banner %}
+
+{% block content %}
+<div x-data="dashboardPage()" class="p-6 grid-bg min-h-full space-y-6">
+  <div>
+    <h1 class="text-2xl font-semibold tracking-tight">Dashboard</h1>
+    <p class="text-sm text-muted mt-1">
+      Morning check: indices · watchlist · smart money · today's news · forecast scoreboard.
+    </p>
+  </div>
+
+  <!-- Market regime: the top-down read to size every trade against -->
+  <template x-if="regime">
+    <div>{{ regime_banner("regime") }}</div>
+  </template>
+
+  <!-- Indices -->
+  <section>
+    <h2 class="text-sm uppercase tracking-wide text-muted mb-3">Indices</h2>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <template x-for="q in indices" :key="q.symbol">
+        <a :href="'/stocks/' + q.symbol" class="card p-4 hover:border-accent/30 transition-colors">
+          <div class="text-xs text-muted" x-text="q.name ?? q.symbol"></div>
+          <div class="text-xl font-mono tabular mt-1" x-text="fmtNumber(q.price)"></div>
+          <div :class="cn('text-sm tabular', changeColor(q.change_pct))" x-text="fmtPct(q.change_pct)"></div>
+        </a>
+      </template>
+    </div>
+  </section>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div class="lg:col-span-2 space-y-6">
+      <!-- Watchlist (live over WebSocket) -->
+      <section>
+        <div class="flex items-baseline justify-between mb-3">
+          <h2 class="text-sm uppercase tracking-wide text-muted">Watchlist</h2>
+          <a href="/watchlists" class="text-xs text-muted hover:text-accent">Manage watchlists →</a>
+        </div>
+        <div class="card">
+          <table class="w-full text-sm">
+            <thead class="text-xs uppercase tracking-wide text-muted border-b border-line">
+              <tr>
+                <th class="text-left px-4 py-2">Symbol</th>
+                <th class="text-left px-4 py-2">Name</th>
+                <th class="text-right px-4 py-2">Price</th>
+                <th class="text-right px-4 py-2">Change</th>
+                <th class="text-right px-4 py-2">Change %</th>
+                <th class="text-right px-4 py-2 w-12">·</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="r in watch" :key="r.symbol">
+                <tr class="border-b border-line last:border-0 hover:bg-surface2">
+                  <td class="px-4 py-2 font-mono"><a :href="'/stocks/' + r.symbol" class="hover:text-accent" x-text="r.symbol"></a></td>
+                  <td class="px-4 py-2 text-muted truncate max-w-xs" x-text="r.name"></td>
+                  <td :class="cn('px-4 py-2 text-right tabular transition-colors duration-200', flash[r.symbol] === 'up' && 'text-success', flash[r.symbol] === 'down' && 'text-danger')"
+                      x-text="fmtNumber(live[r.symbol]?.price ?? r.price)"></td>
+                  <td :class="cn('px-4 py-2 text-right tabular', changeColor(live[r.symbol]?.change ?? r.change))"
+                      x-text="fmtNumber(live[r.symbol]?.change ?? r.change)"></td>
+                  <td :class="cn('px-4 py-2 text-right tabular', changeColor(live[r.symbol]?.change_pct ?? r.change_pct))"
+                      x-text="fmtPct(live[r.symbol]?.change_pct ?? r.change_pct)"></td>
+                  <td class="px-4 py-2 text-right">
+                    <span :class="cn('inline-block size-2 rounded-full', live[r.symbol] ? 'bg-accent animate-pulse' : 'bg-line')"
+                          :title="live[r.symbol] ? 'live' : 'static'"></span>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- AI verdicts for the first watchlist names -->
+      <section>
+        <div class="flex items-baseline justify-between mb-3">
+          <h2 class="text-sm uppercase tracking-wide text-muted">AI verdicts (watchlist)</h2>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <template x-for="s in verdictSymbols" :key="s">
+            <a :href="'/stocks/' + s" class="card p-3 hover:border-accent/30">
+              <div class="flex items-center justify-between">
+                <span class="font-mono text-sm" x-text="s"></span>
+                <span x-show="opinions[s]" :class="cn('pill border text-[10px]', VERDICT_STYLE[opinions[s]?.verdict])"
+                      x-text="opinions[s]?.verdict.replace('_', ' ')"></span>
+              </div>
+              <div class="text-[11px] text-muted mt-1"
+                   x-text="opinions[s] ? `conf ${(opinions[s].confidence * 100).toFixed(0)}% · score ${opinions[s].score >= 0 ? '+' : ''}${opinions[s].score.toFixed(2)}` : 'Loading…'"></div>
+            </a>
+          </template>
+        </div>
+      </section>
+
+      <!-- Market news -->
+      <section x-show="news.length > 0" x-cloak>
+        <div class="flex items-baseline justify-between mb-3">
+          <h2 class="text-sm uppercase tracking-wide text-muted">Today's market</h2>
+          <a href="/news" class="text-xs text-muted hover:text-accent">Full feed →</a>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <template x-for="a in news.slice(0, 6)" :key="a.url">
+            <a :href="a.url" target="_blank" rel="noreferrer" class="card p-3 hover:border-accent/30">
+              <div class="text-xs text-muted" x-text="a.source"></div>
+              <div class="text-sm font-medium line-clamp-2 mt-0.5" x-text="a.title"></div>
+              <div x-show="a.sentiment !== undefined"
+                   :class="cn('text-[10px] mt-1', a.sentiment > 0.2 ? 'text-success' : a.sentiment < -0.2 ? 'text-danger' : 'text-muted')"
+                   x-text="`sentiment ${a.sentiment > 0 ? '+' : ''}${(a.sentiment * 100).toFixed(0)}`"></div>
+            </a>
+          </template>
+        </div>
+      </section>
+    </div>
+
+    <!-- Right column -->
+    <div class="space-y-6">
+      <!-- Calibration headline -->
+      <template x-if="calib && calib.overall && calib.overall.n > 0">
+        <a href="/calibration" class="card p-4 block hover:border-accent/30">
+          <div class="text-xs uppercase tracking-wide text-muted mb-2">Forecast scoreboard (180d)</div>
+          <div class="grid grid-cols-2 gap-2 text-xs">
+            <div>
+              <div class="text-muted">Hit rate</div>
+              <div class="font-mono tabular text-base" x-text="(calib.overall.hit_rate_direction * 100).toFixed(0) + '%'"></div>
+            </div>
+            <div>
+              <div class="text-muted">Coverage</div>
+              <div class="font-mono tabular text-base" x-text="(calib.overall.coverage_p10_p90 * 100).toFixed(0) + '%'"></div>
+            </div>
+            <div class="col-span-2 text-muted text-[10px] mt-1" x-text="`N = ${calib.overall.n} scored predictions`"></div>
+          </div>
+        </a>
+      </template>
+
+      <!-- Recent political trades -->
+      <div class="card" x-show="politicians.length > 0" x-cloak>
+        <div class="card-header flex items-center justify-between">
+          <span>Political trades</span>
+          <span x-show="politicians.some((t) => t.demo)" class="pill border border-amber-500/40 text-amber-300 text-[10px]"
+                title="No disclosure source configured: showing the bundled demo sample (fictional members). Run scripts/refresh_congress.py for real House filings.">
+            demo sample
+          </span>
+          <span x-show="!politicians.some((t) => t.demo)" class="text-[10px] text-muted normal-case font-normal"
+                title="STOCK Act mandates disclosure within 45 days of a trade — even live data is naturally 4-8 weeks behind execution.">
+            most recent disclosures
+          </span>
+        </div>
+        <ul class="divide-y divide-line">
+          <template x-for="(t, i) in politicians.slice(0, 6)" :key="i">
+            <li class="px-4 py-2 text-xs">
+              <div class="flex items-center justify-between">
+                <a :href="'/stocks/' + t.symbol" class="font-mono hover:text-accent" x-text="t.symbol"></a>
+                <span :class="cn('pill border tabular', t.side === 'buy' || t.side === 'purchase'
+                        ? 'border-emerald-500/40 text-emerald-300 bg-emerald-500/5'
+                        : 'border-rose-500/40 text-rose-300 bg-rose-500/5')" x-text="t.side"></span>
+              </div>
+              <div class="text-muted" x-text="`${t.politician}${t.chamber ? ` · ${t.chamber}` : ''} · ${t.amount_range}`"></div>
+              <div class="text-muted">
+                <span x-text="'traded ' + t.traded_at"></span>
+                <span x-show="t.disclosed_at" class="ml-2 text-[10px]" x-text="'· disclosed ' + t.disclosed_at"></span>
+              </div>
+            </li>
+          </template>
+        </ul>
+      </div>
+
+      <!-- Trending sentiment -->
+      <div class="card" x-show="trending.length > 0" x-cloak>
+        <div class="card-header">Trending sentiment</div>
+        <ul class="divide-y divide-line">
+          <template x-for="t in trending.slice(0, 6)" :key="t.symbol">
+            <li class="px-4 py-2 flex items-center justify-between text-xs">
+              <a :href="'/stocks/' + t.symbol" class="font-mono hover:text-accent" x-text="t.symbol"></a>
+              <div class="text-right">
+                <div :class="cn('tabular', changeColor(t.sentiment))" x-text="(t.sentiment * 100).toFixed(0)"></div>
+                <div class="text-[10px] text-muted" x-text="`${t.n_articles} articles`"></div>
+              </div>
+            </li>
+          </template>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <p class="text-[11px] text-muted">
+    Informational only. Not investment advice. See
+    <a href="/calibration" class="text-accent">calibration page</a> for live accuracy stats.
+  </p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const DEFAULT_WATCH = ["AAPL", "MSFT", "NVDA", "TSLA", "AMD", "META", "GOOGL", "AMZN"];
+  // ETFs stand in for the indices: Alpaca (the reliable feed) doesn't serve ^GSPC etc.
+  // The % change is identical to the underlying index; only the dollar level differs.
+  const INDICES = [
+    { symbol: "SPY", label: "S&P 500 (SPY)" },
+    { symbol: "QQQ", label: "Nasdaq 100 (QQQ)" },
+    { symbol: "DIA", label: "Dow Jones (DIA)" },
+    { symbol: "IWM", label: "Russell 2000 (IWM)" },
+  ];
+
+  async function safeQuote(symbol) {
+    try {
+      const d = await api.detail(symbol);
+      return { ...d.quote, symbol, name: d.profile.name };
+    } catch {
+      return null;
+    }
+  }
+
+  async function safeGet(path) {
+    try { return await request(path); } catch { return null; }
+  }
+
+  function dashboardPage() {
+    return {
+      indices: [],
+      watch: [],
+      live: {},
+      flash: {},
+      verdictSymbols: DEFAULT_WATCH.slice(0, 4),
+      opinions: {},
+      news: [],
+      politicians: [],
+      calib: null,
+      trending: [],
+      regime: null,
+
+      init() {
+        Promise.all(INDICES.map(async (ix) => {
+          const q = await safeQuote(ix.symbol);
+          return q ? { ...q, name: ix.label } : null;
+        })).then((rows) => (this.indices = rows.filter(Boolean)));
+
+        Promise.all(DEFAULT_WATCH.map(safeQuote)).then((rows) => {
+          this.watch = rows.filter(Boolean);
+          this.stopLive = liveQuotes(this.watch.map((r) => r.symbol), (q) => this.onTick(q));
+        });
+
+        for (const s of this.verdictSymbols) {
+          api.opinion(s).then((o) => (this.opinions[s] = o)).catch(() => {});
+        }
+
+        safeGet("/news/market?limit=6").then((r) => (this.news = r || []));
+        safeGet("/politicians/recent?limit=6").then((r) => (this.politicians = r || []));
+        safeGet("/ai/calibration?lookback_days=180").then((r) => (this.calib = r));
+        safeGet("/news/trending").then((r) => (this.trending = r || []));
+        safeGet("/regime").then((r) => (this.regime = r));
+      },
+
+      destroy() {
+        this.stopLive?.();
+      },
+
+      // Brief colour flash when a live price moves away from the last snapshot.
+      onTick(q) {
+        const row = this.watch.find((r) => r.symbol === q.symbol);
+        this.live[q.symbol] = q;
+        if (!row) return;
+        const dir = q.price > row.price ? "up" : q.price < row.price ? "down" : undefined;
+        if (!dir) return;
+        this.flash[q.symbol] = dir;
+        setTimeout(() => (this.flash[q.symbol] = undefined), 800);
+      },
+    };
+  }
+</script>
+{% endblock %}

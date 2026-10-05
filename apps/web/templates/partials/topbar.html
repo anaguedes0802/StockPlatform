@@ -1,0 +1,42 @@
+<header class="h-14 border-b border-line bg-surface flex items-center px-4 gap-4">
+  <div x-data="stockSearch()" class="relative w-full max-w-md" @mousedown.outside="open = false">
+    <div class="flex items-center gap-2 px-3 h-9 rounded-md bg-surface2 border border-line focus-within:border-accent/60">
+      <i data-lucide="search" class="size-4 text-muted"></i>
+      <input x-model="q" @input="open = true" @focus="open = true"
+             @keydown.enter="hits[0] && pick(hits[0].symbol)" @keydown.escape="open = false"
+             placeholder="Search symbols, ETFs, indexes, crypto…"
+             class="bg-transparent outline-none flex-1 text-sm placeholder:text-muted">
+    </div>
+    <div x-show="open && hits.length > 0" x-cloak class="absolute z-30 mt-2 w-full card overflow-hidden">
+      <ul class="max-h-80 overflow-auto divide-y divide-line">
+        <template x-for="h in hits" :key="h.symbol">
+          <li @click="pick(h.symbol)" class="px-3 py-2 hover:bg-surface2 cursor-pointer flex items-center justify-between gap-3">
+            <div>
+              <div class="font-mono text-sm" x-text="h.symbol"></div>
+              <div class="text-xs text-muted truncate max-w-xs" x-text="h.name"></div>
+            </div>
+            <span class="pill bg-surface2 border border-line text-muted" x-text="h.asset_class"></span>
+          </li>
+        </template>
+      </ul>
+    </div>
+  </div>
+
+  <div class="ml-auto flex items-center gap-3 text-sm" x-data x-show="$store.auth.ready" x-cloak>
+    <template x-if="$store.auth.me">
+      <div class="flex items-center gap-3">
+        <span class="text-muted hidden sm:inline" x-text="$store.auth.me.display_name || $store.auth.me.email"></span>
+        <button @click="$store.auth.logout()"
+                class="pill bg-surface2 border border-line hover:border-accent/40 text-muted hover:text-text inline-flex items-center gap-1">
+          <i data-lucide="log-out" class="size-3"></i> Sign out
+        </button>
+      </div>
+    </template>
+    <template x-if="!$store.auth.me">
+      <div class="flex items-center gap-2">
+        <a href="/login" class="pill border border-line text-muted hover:text-text">Sign in</a>
+        <a href="/register" class="pill bg-accent text-bg font-medium hover:bg-accentDark">Sign up</a>
+      </div>
+    </template>
+  </div>
+</header>

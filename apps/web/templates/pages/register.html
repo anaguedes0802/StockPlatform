@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% from "partials/macros.html" import field %}
+
+{% block content %}
+<div x-data="registerPage()" class="min-h-full grid place-items-center p-6">
+  <form @submit.prevent="submit()" class="card w-full max-w-sm p-6 space-y-4">
+    <div>
+      <h1 class="text-xl font-semibold tracking-tight">Create account</h1>
+      <p class="text-xs text-muted">Already have one? <a class="text-accent" href="/login">Sign in</a>.</p>
+    </div>
+    {{ field("Display name (optional)", "name", required=False) }}
+    {{ field("Email", "email", type="email") }}
+    {{ field("Password", "password", type="password") }}
+    <div x-show="err" x-cloak class="text-sm text-danger break-all" x-text="err"></div>
+    <button :disabled="busy" class="w-full rounded-md bg-accent text-bg font-medium py-2 text-sm disabled:opacity-50"
+            x-text="busy ? 'Creating…' : 'Create account'"></button>
+    <p class="text-[11px] text-muted">This platform is informational only. Not investment advice.</p>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function registerPage() {
+    return {
+      email: "", name: "", password: "", err: null, busy: false,
+      async submit() {
+        this.busy = true;
+        this.err = null;
+        try {
+          await Alpine.store("auth").register(this.email, this.password, this.name || undefined);
+          window.location.href = "/dashboard";
+        } catch (e) {
+          this.err = errMsg(e);
+        } finally {
+          this.busy = false;
+        }
+      },
+    };
+  }
+</script>
+{% endblock %}

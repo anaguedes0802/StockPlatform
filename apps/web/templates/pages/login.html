@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% from "partials/macros.html" import field %}
+
+{% block content %}
+<div x-data="loginPage()" class="min-h-full grid place-items-center p-6">
+  <form @submit.prevent="submit()" class="card w-full max-w-sm p-6 space-y-4">
+    <div>
+      <h1 class="text-xl font-semibold tracking-tight">Sign in</h1>
+      <p class="text-xs text-muted">No account? <a class="text-accent" href="/register">Create one</a>.</p>
+    </div>
+    {{ field("Email", "email", type="email", autofocus=True) }}
+    {{ field("Password", "password", type="password") }}
+    <template x-if="needsTotp">
+      <div>{{ field("Authenticator code", "totp", autofocus=True) }}</div>
+    </template>
+    <div x-show="err" x-cloak class="text-sm text-danger break-all" x-text="err"></div>
+    <button :disabled="busy" class="w-full rounded-md bg-accent text-bg font-medium py-2 text-sm disabled:opacity-50"
+            x-text="busy ? 'Signing in…' : needsTotp ? 'Verify code' : 'Sign in'"></button>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function loginPage() {
+    return {
+      email: "", password: "", totp: "", needsTotp: false, err: null, busy: false,
+      async submit() {
+        this.busy = true;
+        this.err = null;
+        try {
+          const r = await fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: this.email, password: this.password, totp_code: this.needsTotp ? this.totp : undefined }),
+          });
+          if (!r.ok) {
+            const text = await r.text();
+            // 2FA accounts: the API asks for the authenticator code first
+            if (text.includes("totp_required")) {
+              this.needsTotp = true;
+              return;
+            }
+            throw new Error(text);
+          }
+          Alpine.store("auth").store(await r.json());
+          window.location.href = "/dashboard";
+        } catch (e) {
+          this.err = errMsg(e);
+        } finally {
+          this.busy = false;
+        }
+      },
+    };
+  }
+</script>
+{% endblock %}

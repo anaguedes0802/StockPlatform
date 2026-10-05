@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} · StockPlatform</title>
+  <meta name="description" content="AI-powered stock analysis, forecasting, and portfolio management.">
+
+  <!-- Tailwind (Play CDN, same theme as the original tailwind.config) -->
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            bg: "#0B0E14",
+            surface: "#11151D",
+            surface2: "#161B26",
+            line: "#1E2533",
+            muted: "#8B95A7",
+            text: "#E5E9F0",
+            accent: "#5EEAD4",
+            accentDark: "#2DD4BF",
+            success: "#22C55E",
+            danger: "#EF4444",
+            warning: "#F59E0B",
+          },
+          fontFamily: {
+            sans: ["Inter", "system-ui", "sans-serif"],
+            mono: ["JetBrains Mono", "ui-monospace", "monospace"],
+          },
+          boxShadow: {
+            card: "0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 24px -12px rgba(0,0,0,0.6)",
+          },
+        },
+      },
+    };
+  </script>
+  <style type="text/tailwindcss">
+    @layer base {
+      html, body { background-color: #0B0E14; color: #E5E9F0; }
+      body { font-feature-settings: "ss01" on, "cv11" on; }
+      .tabular { font-variant-numeric: tabular-nums; }
+    }
+    @layer components {
+      .card { @apply rounded-xl border border-line bg-surface shadow-card; }
+      .card-header { @apply flex items-center justify-between px-4 py-3 border-b border-line text-sm text-muted; }
+      .pill { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium; }
+    }
+  </style>
+  <link rel="stylesheet" href="{{ url_for('static', path='css/app.css') }}">
+
+  <!-- Libraries (no build step) -->
+  <script src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <script>window.APP = { apiPublicUrl: {{ api_public_url | tojson }} };</script>
+  <script src="{{ url_for('static', path='js/core.js') }}"></script>
+  <script src="{{ url_for('static', path='js/charts.js') }}"></script>
+  {% block head %}{% endblock %}
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
+</head>
+<body class="min-h-screen bg-bg text-text antialiased">
+  <div class="flex h-screen overflow-hidden">
+    {% include "partials/sidebar.html" %}
+    <div class="flex-1 flex flex-col overflow-hidden">
+      {% include "partials/topbar.html" %}
+      <main class="flex-1 overflow-auto">
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
