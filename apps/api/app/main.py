@@ -27,6 +27,13 @@ from app.routers import ai, auth, bot, chat, discovery, news, notifications, opp
 async def lifespan(app: FastAPI):
     configure_logging(settings.env)
     log.info("startup", env=settings.env)
+    # Zero-setup local mode: Alembic migrations target Postgres/TimescaleDB, so
+    # on SQLite the schema is created straight from the ORM models.
+    if settings.database_url.startswith("sqlite"):
+        from app.db import models  # noqa: F401  (registers every table)
+        from app.db.base import Base
+        from app.db.session import engine
+        Base.metadata.create_all(engine)
     # Background warmer: keeps screeners + opinion signals + notifications hot
     # so the UI doesn't have to wait on cold scans. Disable with
     # WARMUP_DISABLED=1 in .env (useful for tests).
