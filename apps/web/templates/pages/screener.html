@@ -12,13 +12,13 @@
            class="md:col-span-6 bg-surface2 border border-line rounded px-3 py-2 text-sm">
     <select x-model="assetClass" class="md:col-span-3 bg-surface2 border border-line rounded px-3 py-2 text-sm">
       <option value="">All asset classes</option>
-      <template x-for="a in assetClasses" :key="a">
+      <template hidden x-for="a in assetClasses" :key="a">
         <option :value="a" x-text="a"></option>
       </template>
     </select>
     <select x-model="sector" class="md:col-span-3 bg-surface2 border border-line rounded px-3 py-2 text-sm">
       <option value="">All sectors</option>
-      <template x-for="s in sectors" :key="s">
+      <template hidden x-for="s in sectors" :key="s">
         <option :value="s" x-text="s"></option>
       </template>
     </select>
@@ -36,7 +36,7 @@
         </tr>
       </thead>
       <tbody>
-        <template x-for="h in hits" :key="h.symbol">
+        <template hidden x-for="h in hits" :key="h.symbol">
           <tr class="border-b border-line last:border-0 hover:bg-surface2">
             <td class="px-4 py-2 font-mono">
               <a :href="'/stocks/' + h.symbol" class="hover:text-accent" x-text="h.symbol"></a>
@@ -47,7 +47,7 @@
             <td class="px-4 py-2 text-muted" x-text="h.sector ?? '—'"></td>
           </tr>
         </template>
-        <template x-if="hits.length === 0">
+        <template hidden x-if="hits.length === 0">
           <tr><td class="px-4 py-3 text-sm text-muted" colspan="5" x-text="loading ? 'Loading…' : 'No matches.'"></td></tr>
         </template>
       </tbody>

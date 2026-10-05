@@ -40,7 +40,7 @@
       <p class="text-xs text-muted mt-1">
         Quant entry trigger + an <span class="text-text">AI risk-gate</span> that reviews news &amp; smart-money
         data and can veto or downsize each trade.
-        <template x-if="config?.llm">
+        <template hidden x-if="config?.llm">
           <span :class="config.llm.available ? 'text-success' : 'text-warning'"
                 x-text="'AI gate ' + (config.llm.available ? `online (${config.llm.providers.join(', ')})` : 'offline — trades on the quant signal alone')"></span>
         </template>
@@ -61,7 +61,7 @@
         <option value="single">Single symbol</option>
       </select>
     </label>
-    <template x-if="mode === 'single'">
+    <template hidden x-if="mode === 'single'">
       <label class="block text-xs">
         <span class="block text-muted mb-1">Symbol</span>
         <input x-model="symbol" class="bg-surface2 border border-line rounded px-2 py-1 font-mono uppercase w-28">
@@ -70,17 +70,17 @@
     <button @click="runBacktest()" :disabled="busy" class="rounded bg-accent text-bg font-medium px-4 py-2 disabled:opacity-50 text-sm inline-flex items-center gap-2">
       <i data-lucide="activity" class="size-4"></i> <span x-text="busy ? 'Backtesting…' : 'Run backtest'"></span>
     </button>
-    <template x-if="config">
+    <template hidden x-if="config">
       <div class="ml-auto text-xs text-muted font-mono" x-text="strategyLine"></div>
     </template>
   </div>
 
-  <template x-if="err">
+  <template hidden x-if="err">
     <div class="card p-4 text-sm text-danger" x-text="err"></div>
   </template>
 
   <!-- Portfolio result -->
-  <template x-if="portfolio">
+  <template hidden x-if="portfolio">
     <div class="space-y-6">
       <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {{ stat("'Pooled win rate'", "fmtPct(portfolio.pooled.win_rate_pct)", "portfolio.pooled.win_rate_pct >= 80 ? 'text-success' : 'text-warning'", big=True) }}
@@ -105,7 +105,7 @@
             </tr>
           </thead>
           <tbody>
-            <template x-for="row in Object.entries(portfolio.per_symbol)" :key="row[0]">
+            <template hidden x-for="row in Object.entries(portfolio.per_symbol)" :key="row[0]">
               <tr class="border-b border-line last:border-0">
                 <td class="px-4 py-2 font-mono" x-text="row[0]"></td>
                 <td class="px-4 py-2 text-right tabular" x-text="row[1].n_trades"></td>
@@ -123,7 +123,7 @@
   </template>
 
   <!-- Single-symbol result -->
-  <template x-if="single">
+  <template hidden x-if="single">
     <div class="space-y-6">
       <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {{ stat("`${single.symbol} win rate`", "fmtPct(single.metrics.win_rate_pct)", "single.metrics.win_rate_pct >= 80 ? 'text-success' : 'text-warning'", big=True) }}
@@ -140,7 +140,7 @@
           <div x-init="$nextTick(() => equityChart($el, single.equity_curve, single.equity_curve))" style="height: 320px"></div>
         </div>
       </div>
-      <template x-if="single.trades.length > 0">
+      <template hidden x-if="single.trades.length > 0">
         <div class="card overflow-x-auto">
           <div class="card-header" x-text="`Trades (${single.trades.length})`"></div>
           <table class="w-full text-sm">
@@ -155,7 +155,7 @@
               </tr>
             </thead>
             <tbody>
-              <template x-for="(t, i) in single.trades.slice(-50).reverse()" :key="i">
+              <template hidden x-for="(t, i) in single.trades.slice(-50).reverse()" :key="i">
                 <tr class="border-b border-line last:border-0">
                   <td class="px-4 py-2 tabular" x-text="t.entry_ts.slice(0, 10)"></td>
                   <td class="px-4 py-2 tabular" x-text="t.exit_ts.slice(0, 10)"></td>
@@ -173,7 +173,7 @@
   </template>
 
   <!-- Live broker -->
-  <template x-if="$store.auth.me">
+  <template hidden x-if="$store.auth.me">
     <div class="card">
       <div class="card-header flex items-center justify-between">
         <span class="inline-flex items-center gap-2">
@@ -186,14 +186,14 @@
         </button>
       </div>
 
-      <template x-if="!brokerConfigured">
+      <template hidden x-if="!brokerConfigured">
         <div class="px-4 py-4 text-sm text-muted">
           No Alpaca trading credentials configured. Set <code class="font-mono text-xs">ALPACA_API_KEY</code> and
           <code class="font-mono text-xs">ALPACA_API_SECRET</code> (paper keys) on the API to enable live execution.
         </div>
       </template>
 
-      <template x-if="brokerConfigured && account?.account">
+      <template hidden x-if="brokerConfigured && account?.account">
         <div>
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4">
             {{ stat("'Equity'", "fmtUsd(account.account.equity)", big=True) }}
@@ -202,10 +202,10 @@
             {{ stat("'Market'", "account.market_open ? 'Open' : 'Closed'", "account.market_open ? 'text-success' : 'text-muted'") }}
           </div>
           <div class="px-4 pb-2 text-xs uppercase tracking-wide text-muted" x-text="`Open positions (${account.positions.length})`"></div>
-          <template x-if="account.positions.length === 0">
+          <template hidden x-if="account.positions.length === 0">
             <div class="px-4 pb-4 text-sm text-muted">No open positions.</div>
           </template>
-          <template x-if="account.positions.length > 0">
+          <template hidden x-if="account.positions.length > 0">
             <div class="overflow-x-auto">
               <table class="w-full text-sm">
                 <thead class="text-xs uppercase tracking-wide text-muted border-b border-line">
@@ -219,7 +219,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  <template x-for="p in account.positions" :key="p.symbol">
+                  <template hidden x-for="p in account.positions" :key="p.symbol">
                     <tr class="border-b border-line last:border-0">
                       <td class="px-4 py-2 font-mono" x-text="p.symbol"></td>
                       <td class="px-4 py-2 text-right tabular" x-text="fmtNumber(p.qty)"></td>
@@ -240,10 +240,10 @@
   </template>
 
   <!-- AI gate track record: forward-test scorecard of the LLM risk-gate -->
-  <template x-if="gateErr">
+  <template hidden x-if="gateErr">
     <div class="card p-4 text-xs text-muted" x-text="`AI gate track record unavailable: ${gateErr}`"></div>
   </template>
-  <template x-if="!gateErr && gate">
+  <template hidden x-if="!gateErr && gate">
     <div :class="cn('card border-l-4', TB_GATE_STYLE[gate.verdict.label] ?? 'border-l-line')">
       <div class="card-header flex items-center gap-2">
         <i data-lucide="sparkles" class="size-4 text-accent"></i> AI gate track record
@@ -252,7 +252,7 @@
       <div class="p-4 space-y-3 text-sm">
         <div x-text="gate.verdict.summary"></div>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-          <template x-for="k in ['approve', 'downsize', 'veto']" :key="k">
+          <template hidden x-for="k in ['approve', 'downsize', 'veto']" :key="k">
             <div class="rounded border border-line p-2">
               <div class="uppercase tracking-wide text-muted text-[10px]" x-text="`${k}d · ${gate.counts[k]}`"></div>
               <div class="font-mono mt-1" x-text="gateOutcome(gate, k)"></div>
@@ -260,12 +260,12 @@
           </template>
         </div>
         <div class="text-xs text-muted" x-text="gateValueText(gate)"></div>
-        <template x-if="gate.recent.length > 0">
+        <template hidden x-if="gate.recent.length > 0">
           <div class="overflow-x-auto max-h-64">
             <table class="w-full text-xs font-mono">
               <thead class="text-muted"><tr><th class="text-left">When</th><th class="text-left">Symbol</th><th class="text-left">Decision</th><th class="text-right">Trade R</th><th class="text-left pl-3">Why</th></tr></thead>
               <tbody>
-                <template x-for="d in gate.recent" :key="d.id">
+                <template hidden x-for="d in gate.recent" :key="d.id">
                   <tr class="border-t border-line align-top">
                     <td class="py-1" x-text="d.as_of"></td>
                     <td x-text="d.symbol"></td>
@@ -283,7 +283,7 @@
   </template>
 
   <!-- Market-wide "good time to invest?" banner (investor bots) -->
-  <template x-if="$store.auth.me && marketTiming && marketTiming.level !== 'NORMAL'">
+  <template hidden x-if="$store.auth.me && marketTiming && marketTiming.level !== 'NORMAL'">
     <div :class="cn('card px-4 py-3 flex items-start gap-3 border-l-4', marketTiming.level === 'STRONG_BUY' ? 'border-l-success' : 'border-l-accent')">
       <span :class="cn('inline-flex mt-0.5', marketTiming.level === 'STRONG_BUY' ? 'text-success' : 'text-accent')"><i data-lucide="piggy-bank" class="size-5"></i></span>
       <div class="space-y-0.5">
@@ -298,34 +298,34 @@
   </template>
 
   <!-- A/B experiments: bots that share an `experiment` tag -->
-  <template x-for="e in ($store.auth.me && exps) || []" :key="e.experiment">
+  <template hidden x-for="e in ($store.auth.me && exps) || []" :key="e.experiment">
     <div class="card">
       <div class="card-header flex items-center gap-2 flex-wrap">
         <i data-lucide="brain-circuit" class="size-4 text-accent"></i> <span x-text="`Experiment · ${e.experiment.replace(/_/g, ' ')}`"></span>
         <span class="text-xs text-muted font-normal" x-text="expDays(e)"></span>
       </div>
       <div class="p-4 space-y-3 text-sm">
-        <template x-if="e.description">
+        <template hidden x-if="e.description">
           <div class="text-xs text-muted" x-text="e.description"></div>
         </template>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <template x-for="x in e.arms" :key="x.bot_id">
+          <template hidden x-for="x in e.arms" :key="x.bot_id">
             <div class="rounded border border-line p-3 space-y-1">
               <div class="text-xs uppercase tracking-wide text-muted" x-text="`${x.arm ?? 'arm'} · ML filter ${x.ml_filter ? 'on' : 'off'}`"></div>
-              <template x-if="x.sim">
+              <template hidden x-if="x.sim">
                 <div class="font-mono text-xs space-y-0.5">
                   <div><span x-text="`equity ${fmtUsd(x.sim.equity)}`"></span> <span :class="changeColor(x.sim.return_pct)" x-text="`(${fmtPct(x.sim.return_pct)})`"></span></div>
                   <div x-text="`${x.sim.closed_trades} closed · ${x.sim.win_rate_pct ?? '—'}% winners · realized ${fmtUsd(x.sim.realized_pl)}`"></div>
                   <div x-text="`${x.sim.positions.length} open: ${x.sim.positions.map((p) => p.symbol).join(', ') || 'none'}`"></div>
                 </div>
               </template>
-              <template x-if="!x.sim">
+              <template hidden x-if="!x.sim">
                 <div class="text-xs text-muted">Waiting for its first scheduled run.</div>
               </template>
             </div>
           </template>
         </div>
-        <template x-if="expHasChart(e)">
+        <template hidden x-if="expHasChart(e)">
           <div x-effect="drawExpChart($el, e)" style="height: 320px"></div>
         </template>
         <div class="text-[11px] text-muted" x-text="expNote(e)"></div>
@@ -337,7 +337,7 @@
   <div class="card">
     <div class="card-header flex items-center justify-between">
       <span x-text="'Your bots ' + (bots ? `(${bots.length})` : '')"></span>
-      <template x-if="$store.auth.me">
+      <template hidden x-if="$store.auth.me">
         <div class="flex items-center gap-2 flex-wrap">
           <button @click="createBot('trader')" class="rounded border border-line text-muted hover:text-text px-3 py-1 text-xs inline-flex items-center gap-1">
             <i data-lucide="plus" class="size-3"></i> Trading bot
@@ -352,10 +352,10 @@
       </template>
     </div>
     <div x-show="$store.auth.ready && !$store.auth.me" x-cloak class="px-4 py-4 text-sm text-muted">Log in to create a bot, then scan its universe for today&apos;s entry signals (paper only — no real orders).</div>
-    <template x-if="$store.auth.me && bots && bots.length === 0">
+    <template hidden x-if="$store.auth.me && bots && bots.length === 0">
       <div class="px-4 py-4 text-sm text-muted">No bots yet. Create one to scan the default universe for live signals.</div>
     </template>
-    <template x-for="b in ($store.auth.me && bots) || []" :key="b.id">
+    <template hidden x-for="b in ($store.auth.me && bots) || []" :key="b.id">
       <div class="px-4 py-3 border-b border-line last:border-0 space-y-2">
         <div class="flex items-center gap-2 flex-wrap">
           <span :class="cn('size-2 rounded-full', b.status === 'active' ? 'bg-success' : 'bg-muted')"></span>
@@ -381,7 +381,7 @@
             </button>
           </div>
         </div>
-        <template x-if="!isInvestor(b) && b.last_run_at">
+        <template hidden x-if="!isInvestor(b) && b.last_run_at">
           <div class="text-xs text-muted">
             <span x-text="`Last run ${new Date(b.last_run_at).toLocaleString()} ·`"></span>
             <span x-show="buysOf(b).length" class="text-success" x-text="`BUY: ${buysOf(b).map((s) => s.symbol).join(', ')}`"></span>
@@ -390,7 +390,7 @@
         </template>
 
         <!-- Investor bot controls -->
-        <template x-if="isInvestor(b)">
+        <template hidden x-if="isInvestor(b)">
           <div x-data="{ contribution: 0 }" class="rounded border border-line bg-surface2/40 p-3 space-y-3">
             <!-- What it holds -->
             <div class="space-y-1">
@@ -398,19 +398,19 @@
                 <span x-show="isPicker(b)" class="inline-flex"><i data-lucide="sparkles" class="size-3"></i></span>
                 <span x-text="holdsLabel(b)"></span>
               </div>
-              <template x-if="isPicker(b) && picks(b) && picks(b).length > 0">
+              <template hidden x-if="isPicker(b) && picks(b) && picks(b).length > 0">
                 <div class="flex flex-wrap gap-1.5">
-                  <template x-for="p in picks(b)" :key="p.symbol">
-                    <span class="text-[11px] font-mono px-1.5 py-0.5 rounded bg-accent/10 border border-accent/30"><span x-text="p.symbol"></span><template x-if="p.percentile != null"><span class="text-muted" x-text="` ${p.percentile}%ile`"></span></template></span>
+                  <template hidden x-for="p in picks(b)" :key="p.symbol">
+                    <span class="text-[11px] font-mono px-1.5 py-0.5 rounded bg-accent/10 border border-accent/30"><span x-text="p.symbol"></span><template hidden x-if="p.percentile != null"><span class="text-muted" x-text="` ${p.percentile}%ile`"></span></template></span>
                   </template>
                 </div>
               </template>
-              <template x-if="isPicker(b) && !(picks(b) && picks(b).length > 0)">
+              <template hidden x-if="isPicker(b) && !(picks(b) && picks(b).length > 0)">
                 <div class="text-[11px] text-muted">Picked dynamically each run — hit Preview to see today&apos;s top names.</div>
               </template>
-              <template x-if="!isPicker(b)">
+              <template hidden x-if="!isPicker(b)">
                 <div class="flex flex-wrap gap-1.5">
-                  <template x-for="pair in allocEntries(b)" :key="pair[0]">
+                  <template hidden x-for="pair in allocEntries(b)" :key="pair[0]">
                     <span class="text-[11px] font-mono px-1.5 py-0.5 rounded bg-surface2 border border-line"><span x-text="pair[0]"></span> <span class="text-muted" x-text="`${allocPct(b, pair[1])}%`"></span></span>
                   </template>
                 </div>
@@ -418,14 +418,14 @@
             </div>
 
             <!-- Timing recommendation -->
-            <template x-if="invTiming(b)">
+            <template hidden x-if="invTiming(b)">
               <div class="rounded border border-line p-2 space-y-1">
                 <div class="flex items-center gap-2 flex-wrap">
                   {{ timing_badge("invTiming(b)") }}
                   <span class="text-xs font-medium" x-text="invTiming(b).headline"></span>
                   <span class="ml-auto text-[11px] text-muted font-mono" x-text="`SPY ${invTiming(b).drawdown_from_high_pct}% off high`"></span>
                 </div>
-                <template x-if="invTiming(b).rationale">
+                <template hidden x-if="invTiming(b).rationale">
                   <div class="text-[11px] text-muted" x-text="invTiming(b).rationale"></div>
                 </template>
               </div>
@@ -445,13 +445,13 @@
                 <button @click="previewInvest(b, contribution)" class="rounded border border-line text-muted hover:text-text px-2 py-1 text-xs inline-flex items-center gap-1">
                   <i data-lucide="refresh-cw" class="size-3"></i> Preview
                 </button>
-                <template x-if="!b.armed">
+                <template hidden x-if="!b.armed">
                   <button @click="setArmed(b, true)" :disabled="!brokerReady" :title="brokerReady ? '' : 'Add Alpaca credentials first'"
                           class="rounded border border-success/40 text-success hover:bg-success/10 px-2 py-1 text-xs inline-flex items-center gap-1 disabled:opacity-40">
                     <i data-lucide="zap" class="size-3"></i> Arm
                   </button>
                 </template>
-                <template x-if="b.armed">
+                <template hidden x-if="b.armed">
                   <button @click="setArmed(b, false)" class="rounded border border-line text-muted hover:text-text px-2 py-1 text-xs inline-flex items-center gap-1">
                     <i data-lucide="zap-off" class="size-3"></i> Disarm
                   </button>
@@ -465,17 +465,17 @@
             </div>
 
             <!-- Plan preview -->
-            <template x-if="invPlan(b)">
+            <template hidden x-if="invPlan(b)">
               <div class="text-xs space-y-1">
                 <div class="text-[11px] text-muted">
-                  <span x-text="planLine(invPlan(b))"></span><template x-if="invPlan(b).equity_tilt_applied > 0"><span class="text-accent" x-text="` · dip tilt ×${invPlan(b).equity_tilt_applied}`"></span></template>
+                  <span x-text="planLine(invPlan(b))"></span><template hidden x-if="invPlan(b).equity_tilt_applied > 0"><span class="text-accent" x-text="` · dip tilt ×${invPlan(b).equity_tilt_applied}`"></span></template>
                 </div>
-                <template x-if="invPlan(b).orders.length === 0">
+                <template hidden x-if="invPlan(b).orders.length === 0">
                   <div class="text-muted">Nothing to buy — allocation is on target.</div>
                 </template>
-                <template x-if="invPlan(b).orders.length > 0">
+                <template hidden x-if="invPlan(b).orders.length > 0">
                   <ul class="space-y-0.5">
-                    <template x-for="o in invPlan(b).orders" :key="o.symbol">
+                    <template hidden x-for="o in invPlan(b).orders" :key="o.symbol">
                       <li class="font-mono"><span class="text-success">BUY</span> <span x-text="o.symbol"></span><span class="text-muted" x-text="` · ${fmtUsd(o.notional)} → ${o.target_pct}%`"></span></li>
                     </template>
                   </ul>
@@ -484,15 +484,15 @@
             </template>
 
             <!-- Run outcome -->
-            <template x-if="investRun[b.id]">
+            <template hidden x-if="investRun[b.id]">
               <div class="text-xs">
-                <template x-if="investRun[b.id].blocked">
+                <template hidden x-if="investRun[b.id].blocked">
                   <div class="text-warning" x-text="`Blocked: ${investRun[b.id].blocked.replace(/_/g, ' ')}`"></div>
                 </template>
-                <template x-if="!investRun[b.id].blocked && investBuys(investRun[b.id]) === 0">
+                <template hidden x-if="!investRun[b.id].blocked && investBuys(investRun[b.id]) === 0">
                   <div class="text-muted">No buys placed this pass.</div>
                 </template>
-                <template x-if="!investRun[b.id].blocked && investBuys(investRun[b.id]) > 0">
+                <template hidden x-if="!investRun[b.id].blocked && investBuys(investRun[b.id]) > 0">
                   <div class="text-success" x-text="`Placed ${investBuys(investRun[b.id])} buy order(s)${investRun[b.id].mode === 'paper' ? ' (paper)' : ' (LIVE)'}.`"></div>
                 </template>
               </div>
@@ -501,7 +501,7 @@
         </template>
 
         <!-- Trader bot (live execution) controls -->
-        <template x-if="!isInvestor(b)">
+        <template hidden x-if="!isInvestor(b)">
           <div class="rounded border border-line bg-surface2/40 p-3 space-y-2">
             <div class="flex items-center gap-2 flex-wrap">
               {{ armed_chip() }}
@@ -516,18 +516,18 @@
                 <i data-lucide="brain-circuit" class="size-3"></i>
                 <span x-text="`ML filter ${b.dsl?.ml_filter ? 'on' : 'off'}`"></span>
               </button>
-              <template x-if="b.execution">
+              <template hidden x-if="b.execution">
                 <span class="text-[11px] text-muted font-mono"
                       x-text="`cap ${fmtUsd(b.execution.max_position_usd)} · ≤${b.execution.max_daily_orders} orders/day · stop at ${fmtUsd(b.execution.max_daily_loss_usd)} loss`"></span>
               </template>
               <div class="ml-auto flex items-center gap-2">
-                <template x-if="!b.armed">
+                <template hidden x-if="!b.armed">
                   <button @click="setArmed(b, true)" :disabled="armDisabled(b)" :title="armTitle(b)"
                           class="rounded border border-success/40 text-success hover:bg-success/10 px-2 py-1 text-xs inline-flex items-center gap-1 disabled:opacity-40">
                     <i data-lucide="zap" class="size-3"></i> Arm
                   </button>
                 </template>
-                <template x-if="b.armed">
+                <template hidden x-if="b.armed">
                   <button @click="setArmed(b, false)" class="rounded border border-line text-muted hover:text-text px-2 py-1 text-xs inline-flex items-center gap-1">
                     <i data-lucide="zap-off" class="size-3"></i> Disarm
                   </button>
@@ -540,25 +540,25 @@
               </div>
             </div>
 
-            <template x-if="b.run_state && b.run_state.orders_today != null">
+            <template hidden x-if="b.run_state && b.run_state.orders_today != null">
               <div class="text-[11px] text-muted" x-text="`Today: ${b.run_state.orders_today ?? 0} orders · ${fmtUsd(b.run_state.realized_loss_today ?? 0)} realized loss`"></div>
             </template>
 
             <!-- Swing bot summary -->
-            <template x-if="isSwing(b)">
+            <template hidden x-if="isSwing(b)">
               <div class="text-[11px] space-y-1">
                 <div class="text-muted">
                   <span class="text-accent" x-text="`Swing · ${String(b.dsl.kind).replace('swing_', '')}`"></span>
                   <span x-text="`· risks ${b.execution?.risk_per_trade_pct ?? 1}% of equity per trade · ≤${b.execution?.max_open_positions ?? 5} positions ·`"></span>
                   whole shares with a GTC broker stop · exits before earnings
                 </div>
-                <template x-if="swingTracked(b).length > 0">
+                <template hidden x-if="swingTracked(b).length > 0">
                   <table class="w-full font-mono">
                     <thead class="text-muted">
                       <tr><th class="text-left">Held</th><th class="text-left">Since</th><th class="text-right">Stop</th><th class="text-right">Target</th><th class="text-right">Stop lives at</th></tr>
                     </thead>
                     <tbody>
-                      <template x-for="pair in swingTracked(b)" :key="pair[0]">
+                      <template hidden x-for="pair in swingTracked(b)" :key="pair[0]">
                         <tr>
                           <td x-text="pair[0]"></td>
                           <td x-text="pair[1].entry_date ?? '—'"></td>
@@ -575,16 +575,16 @@
             </template>
 
             <!-- A bot's private simulated paper account (broker "sim") -->
-            <template x-if="b.sim">
+            <template hidden x-if="b.sim">
               <div class="text-[11px] space-y-1">
                 <div class="text-muted">
                   <span class="text-accent">Simulated paper account</span> · equity <span x-text="fmtUsd(b.sim.equity)"></span> <span :class="changeColor(b.sim.return_pct)" x-text="`(${fmtPct(b.sim.return_pct)})`"></span> · cash <span x-text="fmtUsd(b.sim.cash)"></span> · <span x-text="simTail(b.sim, !!b.execution?.autorun)"></span>
                 </div>
-                <template x-if="b.sim.positions.length > 0">
+                <template hidden x-if="b.sim.positions.length > 0">
                   <table class="w-full font-mono">
                     <thead class="text-muted"><tr><th class="text-left">Held</th><th class="text-right">Qty</th><th class="text-right">Entry</th><th class="text-right">Last</th><th class="text-right">Target</th><th class="text-right">Stop</th><th class="text-right">P&amp;L</th></tr></thead>
                     <tbody>
-                      <template x-for="p in b.sim.positions" :key="p.symbol">
+                      <template hidden x-for="p in b.sim.positions" :key="p.symbol">
                         <tr>
                           <td x-text="p.symbol"></td><td class="text-right" x-text="p.qty"></td>
                           <td class="text-right" x-text="fmtNumber(p.avg_entry_price)"></td><td class="text-right" x-text="fmtNumber(p.last_price)"></td>
@@ -600,20 +600,20 @@
             </template>
 
             <!-- Last live run -->
-            <template x-if="lastRun[b.id]">
+            <template hidden x-if="lastRun[b.id]">
               <div class="text-xs space-y-1">
-                <template x-if="lastRun[b.id].blocked">
+                <template hidden x-if="lastRun[b.id].blocked">
                   <div class="text-warning" x-text="`Blocked: ${lastRun[b.id].blocked.replace(/_/g, ' ')}`"></div>
                 </template>
-                <template x-if="!lastRun[b.id].blocked && lastRun[b.id].actions.length === 0">
+                <template hidden x-if="!lastRun[b.id].blocked && lastRun[b.id].actions.length === 0">
                   <div class="text-muted">No actions this pass — no entries fired and no exits triggered.</div>
                 </template>
-                <template x-if="!lastRun[b.id].blocked && lastRun[b.id].actions.length > 0">
+                <template hidden x-if="!lastRun[b.id].blocked && lastRun[b.id].actions.length > 0">
                   <ul class="space-y-1">
-                    <template x-for="(a, i) in lastRun[b.id].actions" :key="i">
+                    <template hidden x-for="(a, i) in lastRun[b.id].actions" :key="i">
                       <li class="font-mono">
-                        <span :class="actionCls(a)" x-text="a.action"></span> <span x-text="a.symbol"></span><template x-if="a.notional != null"><span class="text-muted" x-text="` · ${fmtUsd(a.notional)}`"></span></template><template x-if="a.llm"><span :class="cn('ml-1 text-[10px] uppercase px-1 py-0.5 rounded', llmCls(a.llm.decision))" x-text="`AI ${a.llm.decision}${a.llm.decision === 'DOWNSIZE' ? ` ×${a.llm.size_multiplier}` : ''}`"></span></template><template x-if="a.reason"><span class="text-muted" x-text="` — ${a.reason}`"></span></template>
-                        <template x-if="a.llm?.rationale">
+                        <span :class="actionCls(a)" x-text="a.action"></span> <span x-text="a.symbol"></span><template hidden x-if="a.notional != null"><span class="text-muted" x-text="` · ${fmtUsd(a.notional)}`"></span></template><template hidden x-if="a.llm"><span :class="cn('ml-1 text-[10px] uppercase px-1 py-0.5 rounded', llmCls(a.llm.decision))" x-text="`AI ${a.llm.decision}${a.llm.decision === 'DOWNSIZE' ? ` ×${a.llm.size_multiplier}` : ''}`"></span></template><template hidden x-if="a.reason"><span class="text-muted" x-text="` — ${a.reason}`"></span></template>
+                        <template hidden x-if="a.llm?.rationale">
                           <div class="text-[11px] text-muted pl-4 not-italic" x-text="a.llm.rationale"></div>
                         </template>
                       </li>
@@ -647,16 +647,16 @@
       </div>
     </div>
 
-    <template x-if="!dca">
+    <template hidden x-if="!dca">
       <div class="px-4 py-4 text-sm text-muted">
         Simulate investing a fixed amount every month into the diversified allocation
         (dividends included), vs putting it all in the S&amp;P 500. Pick a monthly amount and run.
       </div>
     </template>
-    <template x-if="dca">
+    <template hidden x-if="dca">
       <div>
         <div class="px-4 pt-3 text-xs text-muted">
-          <span x-text="`${dca.start} → ${dca.end} (${dca.years}y · ${dca.dca.n_contributions} monthly buys · ${fmtUsd(dca.monthly_contribution)}/mo, dividends reinvested)`"></span><template x-if="dca.excluded_no_history.length > 0"><span x-text="` · excluded (no history): ${dca.excluded_no_history.join(', ')}`"></span></template>
+          <span x-text="`${dca.start} → ${dca.end} (${dca.years}y · ${dca.dca.n_contributions} monthly buys · ${fmtUsd(dca.monthly_contribution)}/mo, dividends reinvested)`"></span><template hidden x-if="dca.excluded_no_history.length > 0"><span x-text="` · excluded (no history): ${dca.excluded_no_history.join(', ')}`"></span></template>
         </div>
         <div class="overflow-x-auto">
           <table class="w-full text-sm mt-2">
@@ -671,7 +671,7 @@
               </tr>
             </thead>
             <tbody>
-              <template x-for="row in TB_DCA_ROWS" :key="row.key">
+              <template hidden x-for="row in TB_DCA_ROWS" :key="row.key">
                 <tr class="border-b border-line last:border-0">
                   <td class="px-4 py-2" x-text="row.label"></td>
                   <td class="px-4 py-2 text-right tabular" x-text="fmtUsd(dca[row.key].contributed)"></td>

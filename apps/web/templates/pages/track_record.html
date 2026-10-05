@@ -9,14 +9,14 @@
 
 {# StatCell: `s` is a JS expression for a TrackStat ({n, avg, win_rate, avg_vs_spy, beat_spy_rate}). #}
 {% macro stat_cell(s) -%}
-<template x-if="!{{ s }} || {{ s }}.n === 0">
+<template hidden x-if="!{{ s }} || {{ s }}.n === 0">
   <td class="px-4 py-2 text-right text-muted tabular">—</td>
 </template>
-<template x-if="{{ s }} && {{ s }}.n !== 0">
+<template hidden x-if="{{ s }} && {{ s }}.n !== 0">
   <td class="px-4 py-2 text-right tabular" x-data="{ get s() { return {{ s }} } }">
     <div :class="cn('font-mono', statColor(s.avg))" x-text="`${s.avg > 0 ? '+' : ''}${s.avg}%`"></div>
     <div class="text-[10px] text-muted" x-text="`${s.win_rate}% win · n=${s.n}`"></div>
-    <template x-if="s.avg_vs_spy != null">
+    <template hidden x-if="s.avg_vs_spy != null">
       <div :class="cn('text-[10px] font-mono', statColor(s.avg_vs_spy))"
            x-text="`${s.avg_vs_spy > 0 ? '+' : ''}${s.avg_vs_spy}% vs SPY · ${s.beat_spy_rate}% beat`"></div>
     </template>
@@ -43,12 +43,12 @@
     </button>
   </div>
 
-  <template x-if="err">
+  <template hidden x-if="err">
     <div class="card p-3 text-sm text-danger break-all" x-text="err"></div>
   </template>
 
   <!-- React fragment: an inner space-y-6 keeps the same spacing -->
-  <template x-if="data">
+  <template hidden x-if="data">
     <div class="space-y-6">
       <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
         {{ stat("Names tracked", "String(data.n_records)") }}
@@ -56,12 +56,12 @@
         {{ stat("Strategies", "String(data.by_strategy.length)") }}
       </div>
 
-      <template x-if="data.by_strategy.length === 0">
+      <template hidden x-if="data.by_strategy.length === 0">
         <div class="card p-6 text-sm text-muted text-center">
           No records yet. As the opportunity engine surfaces names, they get logged here and graded once a week has passed.
         </div>
       </template>
-      <template x-if="data.by_strategy.length > 0">
+      <template hidden x-if="data.by_strategy.length > 0">
         <div class="card overflow-x-auto">
           <table class="w-full text-sm">
             <thead class="text-xs uppercase tracking-wide text-muted border-b border-line">
@@ -74,7 +74,7 @@
               </tr>
             </thead>
             <tbody>
-              <template x-for="row in data.by_strategy" :key="row.strategy">
+              <template hidden x-for="row in data.by_strategy" :key="row.strategy">
                 <tr class="border-b border-line last:border-0 hover:bg-surface2">
                   <td class="px-4 py-2 font-medium" x-text="row.strategy.replace(/_/g, ' ')"></td>
                   <td class="px-4 py-2 text-right tabular text-muted" x-text="row.n_surfaced || 0"></td>

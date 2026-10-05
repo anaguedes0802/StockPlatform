@@ -28,7 +28,7 @@
       <div x-show="items !== null && items.length === 0" class="p-6 text-center text-xs text-muted">
         Nothing yet. Click <span class="text-text">Scan</span> to look for rising stars, portfolio alerts, watchlist surges.
       </div>
-      <template x-for="n in (items || [])" :key="n.id">
+      <template hidden x-for="n in (items || [])" :key="n.id">
         <div @click="markRead(n.id)"
              :class="cn('px-3 py-2 border-b border-line/40 hover:bg-surface2/50 cursor-pointer', !n.read_at && 'bg-surface2/30')">
           <div class="flex items-start gap-2">

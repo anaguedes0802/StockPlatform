@@ -9,15 +9,15 @@
 
 {# CopyCell: `s` is a JS expression for a CopyStat ({n, avg_excess_pct, hit_rate_pct, t_stat}) or null. #}
 {% macro copy_cell(s) -%}
-<template x-if="!{{ s }}">
+<template hidden x-if="!{{ s }}">
   <td class="px-3 py-2 text-right text-muted tabular">—</td>
 </template>
-<template x-if="{{ s }}">
+<template hidden x-if="{{ s }}">
   <td class="px-3 py-2 text-right tabular" x-data="{ get s() { return {{ s }} } }">
     <div :class="cn('font-mono', s.avg_excess_pct > 0 ? 'text-emerald-300' : 'text-rose-300')"
          x-text="`${s.avg_excess_pct > 0 ? '+' : ''}${s.avg_excess_pct.toFixed(1)}%`"></div>
     <div class="text-[10px] text-muted">
-      <span x-text="`${s.hit_rate_pct.toFixed(0)}% beat SPY · n=${s.n}`"></span><template x-if="s.t_stat != null"><span :class="Math.abs(s.t_stat) >= 2 ? 'text-text' : ''" x-text="` · t=${s.t_stat.toFixed(1)}`"></span></template>
+      <span x-text="`${s.hit_rate_pct.toFixed(0)}% beat SPY · n=${s.n}`"></span><template hidden x-if="s.t_stat != null"><span :class="Math.abs(s.t_stat) >= 2 ? 'text-text' : ''" x-text="` · t=${s.t_stat.toFixed(1)}`"></span></template>
     </div>
   </td>
 </template>
@@ -43,14 +43,14 @@
     </button>
   </div>
 
-  <template x-if="err">
+  <template hidden x-if="err">
     <div class="card p-3 text-sm text-danger break-all" x-text="err"></div>
   </template>
-  <template x-if="tracker && !tracker.available">
+  <template hidden x-if="tracker && !tracker.available">
     <div class="card p-4 text-sm text-muted" x-text="tracker.message ?? ''"></div>
   </template>
 
-  <template x-if="st">
+  <template hidden x-if="st">
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
       {{ stat("Disclosed trades", "st.trades.toLocaleString()") }}
       {{ stat("Members", "String(st.politicians)") }}
@@ -59,26 +59,26 @@
     </div>
   </template>
 
-  <template x-if="tracker?.caveats">
+  <template hidden x-if="tracker?.caveats">
     <div class="card p-4 text-xs text-muted space-y-1.5">
       <div class="flex items-center gap-1.5 text-text text-sm font-medium"><i data-lucide="info" class="size-4 text-accent"></i> Read before copying anyone</div>
-      <template x-if="tracker.method">
+      <template hidden x-if="tracker.method">
         <p x-text="tracker.method"></p>
       </template>
       <ul class="list-disc pl-5 space-y-1">
-        <template x-for="(c, i) in tracker.caveats" :key="i">
+        <template hidden x-for="(c, i) in tracker.caveats" :key="i">
           <li x-text="c"></li>
         </template>
       </ul>
     </div>
   </template>
 
-  <template x-if="cards.length > 0">
+  <template hidden x-if="cards.length > 0">
     <div class="card overflow-x-auto">
       <div class="px-4 py-3 flex items-center justify-between flex-wrap gap-2 border-b border-line">
         <div class="font-medium">Copy scorecards <span class="text-muted text-xs" x-text="`(last ${cards[0].window_years}y, ≥5 purchases)`"></span></div>
         <div class="flex gap-1 text-xs">
-          <template x-for="[k, l] in SORTS" :key="k">
+          <template hidden x-for="[k, l] in SORTS" :key="k">
             <button @click="sort = k"
                     :class="cn('rounded px-2 py-1 border', sort === k ? 'border-accent text-accent' : 'border-line text-muted hover:text-text')"
                     x-text="l"></button>
@@ -97,7 +97,7 @@
           </tr>
         </thead>
         <tbody>
-          <template x-for="c in cards" :key="c.politician">
+          <template hidden x-for="c in cards" :key="c.politician">
             <tr @click="selected = selected === c.politician ? null : c.politician"
                 :class="cn('border-b border-line/40 last:border-0 cursor-pointer hover:bg-surface2', selected === c.politician && 'bg-surface2')">
               <td class="px-3 py-2">
@@ -105,13 +105,13 @@
                 <div :class="cn('text-[10px]', partyColor(c.party))" x-text="`${c.party || '?'}-${c.state}`"></div>
               </td>
               <td class="px-3 py-2 text-right tabular">
-                <span x-text="c.n_buys"></span><template x-if="c.n_option_buys > 0"><div class="text-[10px] text-muted" x-text="`${c.n_option_buys} options`"></div></template>
+                <span x-text="c.n_buys"></span><template hidden x-if="c.n_option_buys > 0"><div class="text-[10px] text-muted" x-text="`${c.n_option_buys} options`"></div></template>
               </td>
               <td class="px-3 py-2 text-right tabular text-muted" x-text="`${c.median_disclosure_lag_days ?? '—'}d`"></td>
               {{ copy_cell("c.copy_3m_vs_spy") }}
               {{ copy_cell("c.copy_12m_vs_spy") }}
               <td class="px-3 py-2 text-xs">
-                <template x-for="t in c.top_tickers" :key="t">
+                <template hidden x-for="t in c.top_tickers" :key="t">
                   <a :href="'/stocks/' + t" @click.stop class="mr-1.5 font-mono hover:text-accent" x-text="t"></a>
                 </template>
               </td>
@@ -125,15 +125,15 @@
   <div class="card">
     <div class="px-4 py-3 flex items-center justify-between flex-wrap gap-2 border-b border-line">
       <div class="font-medium">
-        <template x-if="selected">
+        <template hidden x-if="selected">
           <span>Trades by <span x-text="selected"></span> <button @click="selected = null" class="text-xs text-muted hover:text-accent ml-2">clear</button></span>
         </template>
-        <template x-if="!selected">
+        <template hidden x-if="!selected">
           <span>Disclosures, last 90 days</span>
         </template>
       </div>
       <div class="flex items-center gap-2 text-xs">
-        <template x-for="s in ['all', 'buy', 'sell']" :key="s">
+        <template hidden x-for="s in ['all', 'buy', 'sell']" :key="s">
           <button @click="side = s"
                   :class="cn('rounded px-2 py-1 border capitalize', side === s ? 'border-accent text-accent' : 'border-line text-muted hover:text-text')"
                   x-text="s === 'all' ? 'All' : s + 's'"></button>
@@ -156,10 +156,10 @@
           </tr>
         </thead>
         <tbody>
-          <template x-if="rows.length === 0">
+          <template hidden x-if="rows.length === 0">
             <tr><td colspan="7" class="px-3 py-6 text-center text-muted text-xs">No trades match.</td></tr>
           </template>
-          <template x-for="(t, i) in rows" :key="i">
+          <template hidden x-for="(t, i) in rows" :key="i">
             <tr class="border-b border-line/40 last:border-0 align-top">
               <td class="px-3 py-2 tabular text-muted whitespace-nowrap" x-text="t.disclosed_at ?? ''"></td>
               <td class="px-3 py-2">
@@ -174,10 +174,10 @@
                       x-text="`${t.side.replace('_', ' ')}${t.asset_type === 'OP' ? ' · opt' : ''}`"></span>
               </td>
               <td class="px-3 py-2">
-                <template x-if="t.symbol">
+                <template hidden x-if="t.symbol">
                   <a :href="'/stocks/' + t.symbol" class="font-mono hover:text-accent" x-text="t.symbol"></a>
                 </template>
-                <template x-if="!t.symbol">
+                <template hidden x-if="!t.symbol">
                   <span class="text-muted text-xs">no ticker</span>
                 </template>
                 <div class="text-[11px] text-muted max-w-md truncate" :title="t.note ?? t.asset_name" x-text="t.note || t.asset_name || ''"></div>
@@ -185,7 +185,7 @@
               <td class="px-3 py-2 text-right tabular text-xs whitespace-nowrap" x-text="t.amount_range"></td>
               <td class="px-3 py-2 text-right tabular text-xs text-muted" x-text="`${lagDays(t) ?? '—'}d`"></td>
               <td class="px-3 py-2 text-right">
-                <template x-if="t.source_url">
+                <template hidden x-if="t.source_url">
                   <a :href="t.source_url" target="_blank" rel="noreferrer" class="text-muted hover:text-accent" title="Official filing">
                     <i data-lucide="external-link" class="size-3.5"></i>
                   </a>

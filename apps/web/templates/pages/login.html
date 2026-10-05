@@ -10,7 +10,7 @@
     </div>
     {{ field("Email", "email", type="email", autofocus=True) }}
     {{ field("Password", "password", type="password") }}
-    <template x-if="needsTotp">
+    <template hidden x-if="needsTotp">
       <div>{{ field("Authenticator code", "totp", autofocus=True) }}</div>
     </template>
     <div x-show="err" x-cloak class="text-sm text-danger break-all" x-text="err"></div>

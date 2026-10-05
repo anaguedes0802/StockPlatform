@@ -4,7 +4,7 @@
 {% macro news_item(a) -%}
 <a :href="{{ a }}.url" target="_blank" rel="noreferrer" class="block card p-4 hover:border-accent/30 transition-colors">
   <div class="flex items-start gap-3">
-    <template x-if="{{ a }}.thumbnail">
+    <template hidden x-if="{{ a }}.thumbnail">
       <img :src="{{ a }}.thumbnail" alt="" class="w-20 h-20 rounded object-cover bg-surface2">
     </template>
     <div class="min-w-0 flex-1">
@@ -15,7 +15,7 @@
         <span :class="cn('ml-auto pill border', sentimentLabel({{ a }}.sentiment).cls)" x-text="sentimentLabel({{ a }}.sentiment).label"></span>
       </div>
       <div class="mt-1 text-sm font-medium line-clamp-2" x-text="{{ a }}.title"></div>
-      <template x-if="{{ a }}.summary">
+      <template hidden x-if="{{ a }}.summary">
         <p class="mt-1 text-xs text-muted line-clamp-2" x-text="{{ a }}.summary"></p>
       </template>
       <div class="mt-2 h-1 rounded bg-surface2 overflow-hidden">
@@ -36,10 +36,10 @@
 
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
     <div class="lg:col-span-2 space-y-3">
-      <template x-for="a in (market ?? []).slice(0, 30)" :key="a.url">
+      <template hidden x-for="a in (market ?? []).slice(0, 30)" :key="a.url">
         {{ news_item("a") }}
       </template>
-      <template x-if="marketLoaded && !market">
+      <template hidden x-if="marketLoaded && !market">
         <div class="card p-6 text-sm text-muted">No news available.</div>
       </template>
     </div>
@@ -47,7 +47,7 @@
       <div class="card">
         <div class="card-header">Trending sentiment</div>
         <ul class="divide-y divide-line">
-          <template x-for="t in (trending ?? [])" :key="t.symbol">
+          <template hidden x-for="t in (trending ?? [])" :key="t.symbol">
             <li class="px-4 py-2 flex items-center justify-between">
               <a :href="'/stocks/' + t.symbol" class="font-mono hover:text-accent" x-text="t.symbol"></a>
               <div class="text-right">
@@ -56,7 +56,7 @@
               </div>
             </li>
           </template>
-          <template x-if="trendingLoaded && (!trending || trending.length === 0)">
+          <template hidden x-if="trendingLoaded && (!trending || trending.length === 0)">
             <li class="px-4 py-3 text-xs text-muted">No data yet.</li>
           </template>
         </ul>

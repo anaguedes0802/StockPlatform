@@ -24,3 +24,5 @@ artifacts
 *.db.bak*
 *.sqlite
 .claude/
+
+*.egg-info/

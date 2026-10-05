@@ -33,7 +33,7 @@
     </div>
   </div>
   <div x-show="d.components.length > 0" class="flex flex-wrap gap-1.5 mt-3">
-    <template x-for="c in d.components" :key="c.name">
+    <template hidden x-for="c in d.components" :key="c.name">
       <span :title="c.detail" :class="cn('pill border text-[11px] inline-flex items-center gap-1', regimeChipColor(c.score))">
         <span x-text="c.name"></span>
         <span class="tabular opacity-70" x-text="`${c.score > 0 ? '+' : ''}${c.score.toFixed(2)}`"></span>

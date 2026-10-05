@@ -16,7 +16,7 @@
     </p>
   </div>
 
-  <template x-if="loaded && (!d || d.overall.n === 0)">
+  <template hidden x-if="loaded && (!d || d.overall.n === 0)">
     <div class="card p-8 text-sm text-muted">
       <p class="mb-2">No scored predictions yet.</p>
       <p>
@@ -32,7 +32,7 @@
   </template>
 
   <!-- React fragment: an inner space-y-6 keeps the same spacing -->
-  <template x-if="loaded && d && d.overall.n > 0">
+  <template hidden x-if="loaded && d && d.overall.n > 0">
     <div class="space-y-6">
       <div class="card p-4">
         <div class="text-xs uppercase tracking-wide text-muted mb-1" x-text="`Overall — last ${d.lookback_days} days`"></div>
@@ -50,7 +50,7 @@
         </p>
       </div>
 
-      <template x-if="Object.keys(d.per_horizon).length > 0">
+      <template hidden x-if="Object.keys(d.per_horizon).length > 0">
         <div class="card">
           <div class="card-header">Per horizon</div>
           <table class="w-full text-sm">
@@ -65,7 +65,7 @@
               </tr>
             </thead>
             <tbody>
-              <template x-for="[h, s] in Object.entries(d.per_horizon)" :key="h">
+              <template hidden x-for="[h, s] in Object.entries(d.per_horizon)" :key="h">
                 <tr class="border-b border-line last:border-0">
                   <td class="px-4 py-2 font-mono" x-text="h"></td>
                   <td class="px-4 py-2 text-right tabular" x-text="s.n"></td>
@@ -81,7 +81,7 @@
         </div>
       </template>
 
-      <template x-if="d.recent_scored.length > 0">
+      <template hidden x-if="d.recent_scored.length > 0">
         <div class="card overflow-x-auto">
           <div class="card-header" x-text="`Recent scored predictions (${d.recent_scored.length})`"></div>
           <table class="w-full text-xs">
@@ -98,7 +98,7 @@
               </tr>
             </thead>
             <tbody>
-              <template x-for="p in d.recent_scored.slice(0, 30)" :key="p.id">
+              <template hidden x-for="p in d.recent_scored.slice(0, 30)" :key="p.id">
                 <tr class="border-b border-line/40 last:border-0">
                   <td class="px-4 py-1.5 font-mono">
                     <a :href="'/stocks/' + p.symbol" class="hover:text-accent" x-text="p.symbol"></a>
