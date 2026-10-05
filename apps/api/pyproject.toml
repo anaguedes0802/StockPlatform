@@ -66,6 +66,14 @@ social = [
   "praw>=7.7",            # Reddit API (optional; set REDDIT_CLIENT_ID/SECRET)
 ]
 
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# Only the `app` package is installable; alembic/, scripts/ and tests/ live next to it.
+[tool.setuptools.packages.find]
+include = ["app*"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
