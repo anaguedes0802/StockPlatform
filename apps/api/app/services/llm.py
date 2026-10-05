@@ -176,37 +176,31 @@ def _ollama_generate(system: str, user: str, *, max_tokens: int, temperature: fl
                      provider="ollama", model=model)
 
 
+GROQ_FAST_MODEL = "openai/gpt-oss-20b"
+GROQ_QUALITY_MODEL = "openai/gpt-oss-120b"
+
+
 def _groq_generate(system: str, user: str, *, max_tokens: int, temperature: float, expect_json: bool, tier: str = "fast") -> LLMResult | None:
     """Groq via OpenAI-compatible API. Tries the user-configured model first;
     on 429 (rate or daily quota), automatically falls back to a smaller model
     with a more generous free-tier quota before giving up.
 
-    Free-tier daily request caps (as of 2025-Q1):
-        llama-3.3-70b-versatile  ≈ 1,000  req/day, 12k TPM   ← `quality` tier
-        llama-3.1-8b-instant     ≈ 14,400 req/day, 6k TPM    ← `fast` tier workhorse
-    The 70B is materially better at nuanced analyst narrative + reasoning, so
-    opinion synthesis asks for it via tier="quality"; high-volume calls (news
-    classification, chat) stay on the 8B. Either way, if the chosen model 429s
-    we fall back to the other so the request still completes.
+    Two tiers (Groq retired the Llama 3.x models in 2026):
+        openai/gpt-oss-120b  ← `quality` tier (analyst narrative, reasoning)
+        openai/gpt-oss-20b   ← `fast` tier workhorse (news classification, chat)
+    Opinion synthesis asks for the larger model via tier="quality"; high-volume
+    calls stay on the small one. If the chosen model 429s we fall back to the
+    other so the request still completes.
     """
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
         return None
     if tier == "quality":
-        primary = os.environ.get("GROQ_QUALITY_MODEL", "llama-3.3-70b-versatile")
+        primary = os.environ.get("GROQ_QUALITY_MODEL", GROQ_QUALITY_MODEL)
     else:
-        primary = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
-    # Fallback chain — only the two Llama models, which both accept the
-    # OpenAI-compat `response_format: json_object`. We previously included
-    # `openai/gpt-oss-20b` but it returns HTTP 400 to that parameter, so it
-    # was burning cool-off time without ever producing a result.
-    fallbacks: list[str] = []
-    if primary != "llama-3.3-70b-versatile" and tier == "quality":
-        fallbacks.append("llama-3.3-70b-versatile")
-    if primary != "llama-3.1-8b-instant":
-        fallbacks.append("llama-3.1-8b-instant")
-    if primary != "llama-3.3-70b-versatile" and tier != "quality":
-        fallbacks.append("llama-3.3-70b-versatile")
+        primary = os.environ.get("GROQ_MODEL", GROQ_FAST_MODEL)
+    # Fallback chain: both gpt-oss models accept `response_format: json_object`.
+    fallbacks = [m for m in (GROQ_QUALITY_MODEL, GROQ_FAST_MODEL) if m != primary]
 
     for model in [primary, *fallbacks]:
         try:
@@ -255,10 +249,9 @@ def _gemini_generate(system: str, user: str, *, max_tokens: int, temperature: fl
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         return None
-    # `gemini-1.5-flash` returns 404 in 2025 — Google retired the bare name.
-    # Use the `-latest` alias or a pinned 2.x model. See
-    # https://ai.google.dev/gemini-api/docs/models
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+    # Google retires model names regularly (1.5 and 2.0 Flash are gone); pin a
+    # current stable one. See https://ai.google.dev/gemini-api/docs/models
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
     try:
         # REST API — avoids pulling the google-generativeai SDK (~50 MB) just for this.
         body: dict[str, Any] = {

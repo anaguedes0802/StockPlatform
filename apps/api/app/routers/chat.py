@@ -295,13 +295,12 @@ async def _groq_tool_loop(req: ChatRequest) -> AsyncIterator[str]:
             yield c
         return
 
-    # Tool-call models tried in order: 8b-instant first (14k req/day, fast),
-    # 70b-versatile as fallback (1k req/day but better at multi-tool routing).
-    # The 8B at tools is "good enough" for the common case of "look up X for
-    # symbol Y" — and crucially, doesn't burn the 70B daily quota on simple
-    # questions.
-    primary_tool_model   = os.environ.get("GROQ_TOOL_MODEL", "llama-3.1-8b-instant")
-    secondary_tool_model = "llama-3.3-70b-versatile" if primary_tool_model != "llama-3.3-70b-versatile" else "llama-3.1-8b-instant"
+    # Tool-call models tried in order: the small gpt-oss first (fast, generous
+    # free quota), the 120B as fallback (better at multi-tool routing). Both are
+    # reasoning models: keep reasoning effort low and leave enough token budget
+    # for the hidden reasoning plus the final answer.
+    primary_tool_model   = os.environ.get("GROQ_TOOL_MODEL", "openai/gpt-oss-20b")
+    secondary_tool_model = "openai/gpt-oss-120b" if primary_tool_model != "openai/gpt-oss-120b" else "openai/gpt-oss-20b"
 
     system = req.system or (
         "You are the in-platform AI assistant for a stock analysis app. "
@@ -347,8 +346,9 @@ async def _groq_tool_loop(req: ChatRequest) -> AsyncIterator[str]:
                         "messages": messages,
                         "tools": tools_schema,
                         "tool_choice": "auto",
-                        "max_tokens": 1200,
+                        "max_tokens": 4000,
                         "temperature": 0.3,
+                        "reasoning_effort": "low",
                     },
                     headers={"Authorization": f"Bearer {api_key}"},
                     timeout=45.0,
@@ -394,7 +394,10 @@ async def _groq_tool_loop(req: ChatRequest) -> AsyncIterator[str]:
             for tc in tool_calls:
                 fn = tc.get("function", {})
                 yield _sse({"type": "tool_use", "name": fn.get("name"), "input": _safe_args(fn.get("arguments"))})
-            messages.append(msg)  # the assistant message that requested tools
+            # the assistant message that requested tools (without the model's
+            # private reasoning, which the API does not accept back as input)
+            messages.append({"role": "assistant", "content": msg.get("content") or "",
+                             "tool_calls": tool_calls})
             for tc in tool_calls:
                 fn = tc.get("function", {})
                 args = _safe_args(fn.get("arguments"))
