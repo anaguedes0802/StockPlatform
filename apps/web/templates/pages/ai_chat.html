@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+
+{# Port of app/ai-chat/page.tsx. The answer streams as Server-Sent Events through the /api proxy. #}
+
+{% block content %}
+<div x-data="aiChatPage()" class="h-full flex">
+  <template hidden x-if="$store.auth.me && sessions.length > 0">
+    <aside class="hidden lg:flex flex-col w-56 border-r border-line bg-surface">
+      <div class="px-3 py-3 text-xs uppercase tracking-wide text-muted border-b border-line">
+        Past chats
+      </div>
+      <button @click="newChat()"
+              class="mx-2 my-2 rounded border border-line text-muted hover:text-text text-xs py-1.5 inline-flex items-center justify-center gap-1">
+        <i data-lucide="message-square" class="size-3"></i> New chat
+      </button>
+      <div class="flex-1 overflow-auto px-2 space-y-1">
+        <template hidden x-for="s in sessions" :key="s.id">
+          <button @click="loadSession(s.id)"
+                  :class="cn('block w-full text-left px-2 py-1.5 rounded text-xs hover:bg-surface2 truncate', sessionId === s.id ? 'bg-surface2 text-text' : 'text-muted')"
+                  :title="s.title"><span x-text="s.title"></span><span class="block text-[10px] text-muted" x-text="`${s.n_messages} msgs`"></span></button>
+        </template>
+      </div>
+    </aside>
+  </template>
+  <div class="flex-1 flex flex-col">
+    <div class="px-6 pt-6">
+      <h1 class="text-2xl font-semibold tracking-tight">AI Assistant</h1>
+      <p class="text-sm text-muted mt-1">
+        Ask anything — forecasts, recommendations, news, comparisons, backtests. The assistant grounds answers via tool calls.
+      </p>
+    </div>
+
+    <div class="flex-1 overflow-auto px-6 py-4 space-y-4">
+      <!-- `hidden` on the templates keeps Tailwind's space-y from adding a top margin to the first bubble -->
+      <template hidden x-if="messages.length === 0">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-2xl">
+          <template hidden x-for="s in SUGGESTIONS" :key="s">
+            <button @click="input = s"
+                    class="card p-4 text-left text-sm text-muted hover:text-text hover:border-accent/30" x-text="s"></button>
+          </template>
+        </div>
+      </template>
+
+      <template hidden x-for="(m, i) in messages" :key="i">
+        <div :class="cn('flex', m.role === 'user' ? 'justify-end' : 'justify-start')">
+          <div :class="cn('max-w-2xl rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap', m.role === 'user' ? 'bg-accent/15 text-text border border-accent/30' : 'bg-surface border border-line')"><span x-text="m.content"></span><span x-show="!m.content && busy" class="text-muted">thinking…</span></div>
+        </div>
+      </template>
+
+      <template hidden x-if="tools.length > 0">
+        <div class="max-w-2xl card p-3 text-xs">
+          <div class="flex items-center gap-2 text-muted mb-1"><i data-lucide="wrench" class="size-3"></i> Tool calls</div>
+          <ul class="space-y-1">
+            <template hidden x-for="(t, i) in tools" :key="i">
+              <li class="font-mono">
+                <span class="text-accent" x-text="t.name"></span><span class="text-muted" x-text="` · ${JSON.stringify(t.input)}`"></span>
+              </li>
+            </template>
+          </ul>
+        </div>
+      </template>
+      <div x-ref="bottom"></div>
+    </div>
+
+    <div class="border-t border-line bg-surface p-3">
+      <form @submit.prevent="send()" class="max-w-3xl mx-auto flex items-center gap-2">
+        <input x-model="input"
+               placeholder="Ask about a symbol, a strategy, or your portfolio…"
+               :disabled="busy"
+               class="flex-1 bg-surface2 border border-line rounded-md px-3 py-2 text-sm focus:outline-none focus:border-accent/60 disabled:opacity-60">
+        <button :disabled="busy || !input.trim()" class="rounded-md bg-accent text-bg px-3 py-2 text-sm font-medium disabled:opacity-50 inline-flex items-center gap-1">
+          <i data-lucide="send" class="size-4"></i> Send
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const SUGGESTIONS = [
+    "Should I buy NVDA right now?",
+    "Compare AMD vs Intel on fundamentals + sentiment.",
+    "What's the 30d forecast for AAPL and why?",
+    "Backtest an SMA 12/26 crossover on SPY.",
+  ];
+
+  function aiChatPage() {
+    return {
+      sessions: [],
+      sessionId: null,
+      messages: [],
+      input: "",
+      busy: false,
+      tools: [],
+
+      async init() {
+        await authReady();
+        this.refreshSessions();
+        this.$watch("$store.auth.me", () => this.refreshSessions());
+      },
+
+      async refreshSessions() {
+        if (!Alpine.store("auth").me) return;
+        try {
+          this.sessions = await authedFetch("/ai/chat/sessions");
+        } catch {}
+      },
+
+      async loadSession(id) {
+        try {
+          const msgs = await authedFetch(`/ai/chat/sessions/${id}/messages`);
+          this.sessionId = id;
+          this.messages = msgs.map((m) => ({ role: m.role, content: m.content }));
+          this.tools = [];
+          this.scrollDown();
+        } catch {}
+      },
+
+      newChat() {
+        this.sessionId = null;
+        this.messages = [];
+        this.tools = [];
+      },
+
+      // useEffect(() => bottomRef.scrollIntoView(...), [messages, tools, busy])
+      scrollDown() {
+        this.$nextTick(() => this.$refs.bottom?.scrollIntoView({ behavior: "smooth" }));
+      },
+
+      async send() {
+        const text = this.input.trim();
+        if (!text || this.busy) return;
+        this.input = "";
+        this.tools = [];
+        const nextMessages = [...this.messages, { role: "user", content: text }, { role: "assistant", content: "" }];
+        this.messages = nextMessages;
+        this.busy = true;
+        this.scrollDown();
+
+        try {
+          const token = localStorage.getItem("sp.access");
+          const r = await fetch("/api/ai/chat", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ messages: nextMessages.slice(0, -1), session_id: this.sessionId }),
+          });
+          if (!r.ok || !r.body) throw new Error(`http ${r.status}`);
+          // The server attaches X-Session-Id on the first turn (when logged in) so we
+          // can pin subsequent turns to the same conversation.
+          const sid = r.headers.get("X-Session-Id");
+          if (sid) this.sessionId = sid;
+
+          const reader = r.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const events = buffer.split("\n\n");
+            buffer = events.pop() ?? "";
+            for (const ev of events) {
+              if (!ev.startsWith("data: ")) continue;
+              let parsed;
+              try { parsed = JSON.parse(ev.slice(6)); } catch { continue; }
+              if (parsed.type === "delta") {
+                this.messages[this.messages.length - 1].content += parsed.text;
+              } else if (parsed.type === "tool" || parsed.type === "tool_use") {
+                // "tool" = Anthropic path, "tool_use" = Groq tool loop
+                this.tools.push({ name: parsed.name, input: parsed.input });
+              } else if (parsed.type === "done") {
+                // fine
+              }
+            }
+            this.scrollDown();
+          }
+        } catch (e) {
+          this.messages[this.messages.length - 1].content += `\n\n[error: ${e?.message ?? e}]`;
+        } finally {
+          this.busy = false;
+          this.scrollDown();
+          // Persist the assistant turn server-side so the session can be replayed.
+          try {
+            const final = this.messages[this.messages.length - 1]?.content ?? "";
+            if (Alpine.store("auth").me && this.sessionId && final) {
+              await authedFetch(`/ai/chat/sessions/${this.sessionId}/finalize`, {
+                method: "POST",
+                body: JSON.stringify({ assistant_content: final, tool_calls: this.tools }),
+              });
+              this.refreshSessions();
+            }
+          } catch {}
+        }
+      },
+    };
+  }
+</script>
+{% endblock %}

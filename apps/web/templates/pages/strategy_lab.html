@@ -1,0 +1,259 @@
+{% extends "base.html" %}
+
+{# Port of app/strategy-lab/page.tsx (+ components/strategy/EquityChart.tsx via equityChart()). #}
+
+{# <Labeled label className>{children}</Labeled> #}
+{% macro labeled(label, cls="") -%}
+<label class="block text-xs {{ cls }}">
+  <span class="block text-muted mb-1">{{ label }}</span>
+  {{ caller() }}
+</label>
+{%- endmacro %}
+
+{# <Stat label value cls/>: value / cls are JS expressions in the Alpine scope. #}
+{% macro stat(label, value, cls="''") -%}
+<div class="card p-3">
+  <div class="text-[10px] uppercase tracking-wide text-muted">{{ label }}</div>
+  <div :class="cn('font-mono tabular mt-1 text-sm', {{ cls }})" x-text="{{ value }}"></div>
+</div>
+{%- endmacro %}
+
+{% block content %}
+<div x-data="strategyLabPage()" class="p-6 space-y-6">
+  <div>
+    <h1 class="text-2xl font-semibold tracking-tight">Strategy Lab</h1>
+    <p class="text-sm text-muted mt-1">Build, backtest, and compare. SMA cross · RSI · MACD · buy &amp; hold.</p>
+  </div>
+
+  <div class="card p-4 grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+    {% call labeled("Symbol", "md:col-span-2") %}
+      <input x-model="symbol" class="w-full bg-surface2 border border-line rounded px-2 py-1 font-mono uppercase">
+    {% endcall %}
+    {% call labeled("Strategy", "md:col-span-3") %}
+      <select x-model.number="preset" class="w-full bg-surface2 border border-line rounded px-2 py-1">
+        <template hidden x-for="(p, i) in PRESETS" :key="p.kind">
+          <option :value="i" :selected="i === preset" x-text="p.label"></option>
+        </template>
+      </select>
+    {% endcall %}
+
+    <template hidden x-if="PRESETS[preset].kind === 'sma_cross'">
+      {% call labeled("Fast", "md:col-span-1") %}
+        <input type="number" x-model.number="fast" class="w-full bg-surface2 border border-line rounded px-2 py-1 tabular">
+      {% endcall %}
+    </template>
+    <template hidden x-if="PRESETS[preset].kind === 'sma_cross'">
+      {% call labeled("Slow", "md:col-span-1") %}
+        <input type="number" x-model.number="slow" class="w-full bg-surface2 border border-line rounded px-2 py-1 tabular">
+      {% endcall %}
+    </template>
+    <template hidden x-if="PRESETS[preset].kind === 'rsi'">
+      {% call labeled("Buy <", "md:col-span-1") %}
+        <input type="number" x-model.number="rsiBuy" class="w-full bg-surface2 border border-line rounded px-2 py-1 tabular">
+      {% endcall %}
+    </template>
+    <template hidden x-if="PRESETS[preset].kind === 'rsi'">
+      {% call labeled("Sell >", "md:col-span-1") %}
+        <input type="number" x-model.number="rsiSell" class="w-full bg-surface2 border border-line rounded px-2 py-1 tabular">
+      {% endcall %}
+    </template>
+
+    {% call labeled("Initial cash", "md:col-span-2") %}
+      <input x-model="cash" class="w-full bg-surface2 border border-line rounded px-2 py-1 tabular">
+    {% endcall %}
+    <div class="md:col-span-2">
+      <button @click="run()" :disabled="busy" class="w-full rounded bg-accent text-bg font-medium py-2 disabled:opacity-50 text-sm"
+              x-text="busy ? 'Running…' : 'Run backtest'"></button>
+    </div>
+  </div>
+
+  <template hidden x-if="$store.auth.me">
+    <div class="card p-4 flex flex-wrap items-center gap-2 text-sm">
+      <i data-lucide="list-checks" class="size-4 text-muted"></i>
+      <input x-model="strategyName"
+             class="bg-surface2 border border-line rounded px-2 py-1 text-sm w-56"
+             placeholder="Name this strategy">
+      <button @click="saveStrategy()" class="rounded border border-line text-muted hover:text-text px-3 py-1 text-xs inline-flex items-center gap-1">
+        <i data-lucide="save" class="size-3"></i> Save current config
+      </button>
+      <template hidden x-if="saveStatus">
+        <span :class="cn('text-xs', saveStatus.startsWith('Failed') ? 'text-danger' : 'text-success')" x-text="saveStatus"></span>
+      </template>
+
+      <template hidden x-if="saved && saved.length > 0">
+        <div class="ml-auto flex flex-wrap items-center gap-2">
+          <span class="text-xs text-muted">Saved:</span>
+          <template hidden x-for="s in saved.slice(0, 6)" :key="s.id">
+            <button @click="loadStrategy(s)"
+                    class="pill border border-line text-muted hover:text-text"
+                    :title="JSON.stringify(s.dsl)" x-text="s.name"></button>
+          </template>
+        </div>
+      </template>
+    </div>
+  </template>
+
+  <template hidden x-if="err">
+    <div class="card p-4 text-sm text-danger" x-text="err"></div>
+  </template>
+
+  <template hidden x-if="result">
+    <div class="space-y-6">
+      <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+        {{ stat("Return", "fmtPct(result?.metrics.total_return_pct)", "changeColor(result?.metrics.total_return_pct)") }}
+        {{ stat("CAGR", "fmtPct(result?.metrics.cagr_pct)", "changeColor(result?.metrics.cagr_pct)") }}
+        {{ stat("Sharpe", "fmtNumber(result?.metrics.sharpe)") }}
+        {{ stat("Sortino", "fmtNumber(result?.metrics.sortino)") }}
+        {{ stat("Max DD", "fmtPct(result?.metrics.max_drawdown_pct)", "'text-danger'") }}
+        {{ stat("Trades", "String(result?.metrics.n_trades)") }}
+        {{ stat("Final", "fmtNumber(result?.metrics.final_equity)") }}
+        {{ stat("B&H final", "fmtNumber(result?.benchmark.metrics.final_equity)") }}
+      </div>
+
+      <div class="card">
+        <div class="card-header">Equity curve vs Buy &amp; Hold</div>
+        <div class="px-4 py-3">
+          <div x-effect="result; drawEquity($el)" style="height: 320px"></div>
+        </div>
+      </div>
+
+      <template hidden x-if="result?.trades.length > 0">
+        <div class="card overflow-x-auto">
+          <div class="card-header" x-text="`Trades (${result?.trades.length})`"></div>
+          <table class="w-full text-sm">
+            <thead class="text-xs uppercase tracking-wide text-muted border-b border-line">
+              <tr>
+                <th class="text-left px-4 py-2">When</th>
+                <th class="text-right px-4 py-2">Price</th>
+                <th class="text-right px-4 py-2">Δ units</th>
+                <th class="text-right px-4 py-2">Fee</th>
+                <th class="text-right px-4 py-2">Position after</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template hidden x-for="(t, i) in (result?.trades ?? []).slice(0, 50)" :key="i">
+                <tr class="border-b border-line last:border-0">
+                  <td class="px-4 py-2 tabular" x-text="t.ts.slice(0, 10)"></td>
+                  <td class="px-4 py-2 text-right tabular" x-text="fmtNumber(t.price)"></td>
+                  <td :class="cn('px-4 py-2 text-right tabular', changeColor(t.delta_units))" x-text="fmtNumber(t.delta_units, 4)"></td>
+                  <td class="px-4 py-2 text-right tabular" x-text="fmtNumber(t.fee, 4)"></td>
+                  <td class="px-4 py-2 text-right tabular" x-text="`${(t.position_after * 100).toFixed(0)}%`"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </template>
+    </div>
+  </template>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const PRESETS = [
+    { kind: "sma_cross",    label: "SMA cross (12/26)",   dsl: { kind: "sma_cross", fast: 12, slow: 26 } },
+    { kind: "rsi",          label: "RSI 30/70",            dsl: { kind: "rsi", period: 14, buy_below: 30, sell_above: 70 } },
+    { kind: "macd_cross",   label: "MACD cross",           dsl: { kind: "macd_cross" } },
+    { kind: "buy_and_hold", label: "Buy & hold",           dsl: { kind: "buy_and_hold" } },
+  ];
+
+  function strategyLabPage() {
+    return {
+      symbol: "AAPL",
+      preset: 0,
+      fast: 12,
+      slow: 26,
+      rsiBuy: 30,
+      rsiSell: 70,
+      cash: "10000",
+      busy: false,
+      err: null,
+      result: null,
+      strategyName: "My SMA cross",
+      saved: null,
+      saveStatus: null,
+
+      async init() {
+        await authReady();
+        this.refreshSaved();
+        // useCallback([me]) + useEffect: reload the list when the signed-in user changes
+        this.$watch("$store.auth.me", () => this.refreshSaved());
+      },
+
+      buildDsl() {
+        const p = PRESETS[this.preset];
+        if (p.kind === "sma_cross") return { kind: "sma_cross", fast: this.fast, slow: this.slow };
+        if (p.kind === "rsi") return { kind: "rsi", period: 14, buy_below: this.rsiBuy, sell_above: this.rsiSell };
+        return p.dsl;
+      },
+
+      async refreshSaved() {
+        if (!Alpine.store("auth").me) return;
+        try {
+          this.saved = await authedFetch("/strategies");
+        } catch {}
+      },
+
+      async saveStrategy() {
+        if (!Alpine.store("auth").me) return;
+        try {
+          this.saveStatus = null;
+          await authedFetch("/strategies", {
+            method: "POST",
+            body: JSON.stringify({ name: this.strategyName.trim() || "Untitled", dsl: this.buildDsl() }),
+          });
+          this.saveStatus = "Saved";
+          this.refreshSaved();
+        } catch (e) {
+          this.saveStatus = `Failed: ${errMsg(e)}`;
+        }
+      },
+
+      loadStrategy(s) {
+        const dsl = s.dsl || {};
+        const kind = dsl.kind;
+        const idx = PRESETS.findIndex((p) => p.kind === kind);
+        if (idx >= 0) this.preset = idx;
+        if (kind === "sma_cross") {
+          this.fast = dsl.fast ?? 12;
+          this.slow = dsl.slow ?? 26;
+        } else if (kind === "rsi") {
+          this.rsiBuy = dsl.buy_below ?? 30;
+          this.rsiSell = dsl.sell_above ?? 70;
+        }
+        this.strategyName = s.name;
+      },
+
+      async run() {
+        this.busy = true;
+        this.err = null;
+        this.result = null;
+        try {
+          const r = await fetch("/api/backtest/run", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              symbol: this.symbol.toUpperCase(),
+              dsl: this.buildDsl(),
+              initial_cash: parseFloat(this.cash),
+            }),
+          });
+          if (!r.ok) throw new Error(await r.text());
+          this.result = await r.json();
+        } catch (e) {
+          this.err = errMsg(e);
+        } finally {
+          this.busy = false;
+        }
+      },
+
+      // <EquityChart strategy={result.equity_curve} benchmark={result.benchmark.equity_curve} />
+      drawEquity(el) {
+        const r = Alpine.raw(this.result);
+        if (r) equityChart(el, r.equity_curve, r.benchmark?.equity_curve);
+      },
+    };
+  }
+</script>
+{% endblock %}

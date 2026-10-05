@@ -1,0 +1,626 @@
+{% extends "base.html" %}
+
+{# Port of app/swing/page.tsx (+ components/strategy/EquityChart.tsx via equityChart()). #}
+
+{# <Stat label value cls sub/>: value / cls / sub are JS expressions in the Alpine scope. #}
+{% macro stat(label, value, cls="''", sub="''") -%}
+<div class="card p-3">
+  <div class="text-[10px] uppercase tracking-wide text-muted">{{ label }}</div>
+  <div :class="cn('font-mono tabular mt-1 text-sm', {{ cls }})" x-text="{{ value }}"></div>
+  <template hidden x-if="{{ sub }}"><div class="text-[10px] text-muted mt-0.5" x-text="{{ sub }}"></div></template>
+</div>
+{%- endmacro %}
+
+{% block content %}
+<div x-data="swingPage()" class="p-6 space-y-6">
+  <div class="flex items-start gap-3">
+    <div class="size-9 rounded-md bg-accent/20 grid place-items-center mt-0.5">
+      <i data-lucide="waves" class="size-5 text-accent"></i>
+    </div>
+    <div>
+      <h1 class="text-2xl font-semibold tracking-tight">Swing Trading</h1>
+      <p class="text-sm text-muted mt-1">
+        Multi-day setups decided on the daily close, executed at the next open, sized by risk, with
+        stops that live at the broker overnight.
+      </p>
+      <p class="text-xs text-muted mt-1" x-text="cfg?.disclaimer"></p>
+    </div>
+  </div>
+
+  <!-- Controls shared by scanner + backtest -->
+  <div class="card p-4 flex flex-wrap items-end gap-3">
+    <label class="block text-xs">
+      <span class="block text-muted mb-1">Setup</span>
+      <select x-model="setup" class="bg-surface2 border border-line rounded px-2 py-1">
+        <template hidden x-for="[k, v] in Object.entries(cfg?.setups ?? {})" :key="k">
+          <option :value="k" :selected="k === setup" x-text="v.label"></option>
+        </template>
+      </select>
+    </label>
+    <label class="block text-xs">
+      <span class="block text-muted mb-1">Universe</span>
+      <select x-model="universe" class="bg-surface2 border border-line rounded px-2 py-1">
+        <template hidden x-for="[k, v] in Object.entries(cfg?.universes ?? {})" :key="k">
+          <option :value="k" :selected="k === universe" x-text="v.label"></option>
+        </template>
+        <option value="custom">Custom symbols…</option>
+      </select>
+    </label>
+    <template hidden x-if="universe === 'custom'">
+      <label class="block text-xs">
+        <span class="block text-muted mb-1">Symbols</span>
+        <input x-model="custom" placeholder="SPY, QQQ, XLE"
+               class="bg-surface2 border border-line rounded px-2 py-1 font-mono uppercase w-64">
+      </label>
+    </template>
+    <label class="block text-xs">
+      <span class="block text-muted mb-1">Account equity ($)</span>
+      <input type="number" min="100" x-model.number="equity"
+             class="bg-surface2 border border-line rounded px-2 py-1 font-mono w-28">
+    </label>
+    <label class="block text-xs">
+      <span class="block text-muted mb-1">Risk / trade (%)</span>
+      <input type="number" min="0.1" max="5" step="0.1" x-model.number="riskPct"
+             class="bg-surface2 border border-line rounded px-2 py-1 font-mono w-20">
+    </label>
+    <label class="inline-flex items-center gap-2 text-xs mb-2" title="Score each setup with the ML signal filter (trains on the universe's history on first use)">
+      <input type="checkbox" x-model="aiScan">
+      <span>AI filter score</span>
+    </label>
+    <button @click="runScan()" :disabled="scanning || !cfg"
+            class="rounded border border-accent/40 text-accent hover:bg-accent/10 font-medium px-4 py-2 disabled:opacity-50 text-sm inline-flex items-center gap-2">
+      <i data-lucide="search" class="size-4"></i> <span x-text="scanning ? 'Scanning…' : 'Scan today'"></span>
+    </button>
+    <button @click="runBacktest()" :disabled="btBusy || !cfg"
+            class="rounded bg-accent text-bg font-medium px-4 py-2 disabled:opacity-50 text-sm inline-flex items-center gap-2">
+      <i data-lucide="activity" class="size-4"></i> <span x-text="btBusy ? 'Backtesting…' : 'Backtest'"></span>
+    </button>
+  </div>
+  <template hidden x-if="cfg">
+    <div class="text-xs text-muted -mt-3 space-y-1">
+      <div x-text="cfg.setups[setup]?.summary"></div>
+      <template hidden x-if="uni">
+        <div :class="uni?.note?.startsWith('SURVIVORSHIP') ? 'text-warning' : ''" x-text="uni?.note"></div>
+      </template>
+    </div>
+  </template>
+
+  <template hidden x-if="err">
+    <div class="card p-4 text-sm text-danger" x-text="err"></div>
+  </template>
+
+  <!-- ScanTable -->
+  <template hidden x-if="scan">
+    <div class="card overflow-x-auto">
+      <div class="card-header flex items-center gap-2">
+        <span x-text="`Today's setups · ${scan.setup_label}`"></span>
+        <span class="text-xs text-muted font-normal"
+              x-text="`${scan.candidates.length} signal${scan.candidates.length === 1 ? '' : 's'} · sized for ${fmtUsd(scan.equity)} at ${scan.risk_pct}% risk`"></span>
+      </div>
+      <template hidden x-if="scan.candidates.length === 0">
+        <div class="p-4 text-sm text-muted">No setups fired on the last completed daily bar. That is normal: most days, most symbols have none.</div>
+      </template>
+      <template hidden x-if="scan.candidates.length > 0">
+        <table class="w-full text-sm">
+          <thead class="text-xs uppercase tracking-wide text-muted border-b border-line">
+            <tr>
+              <th class="text-left px-3 py-2">Symbol</th>
+              <th class="text-left px-3 py-2">Side</th>
+              <th class="text-right px-3 py-2">Last close</th>
+              <th class="text-right px-3 py-2">Stop</th>
+              <th class="text-right px-3 py-2">Target</th>
+              <th class="text-right px-3 py-2">Risk/sh</th>
+              <th class="text-right px-3 py-2">Size</th>
+              <th class="text-right px-3 py-2">Notional</th>
+              <th class="text-right px-3 py-2">$ at risk</th>
+              <template hidden x-if="scanHasAi">
+                <th class="text-right px-3 py-2" title="ML filter: P(win) vs the historical win rate">AI P(win)</th>
+              </template>
+              <th class="text-left px-3 py-2">Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template hidden x-for="c in scan.candidates" :key="c.symbol">
+              <tr class="border-b border-line last:border-0 align-top">
+                <td class="px-3 py-2 font-mono"><span x-text="c.symbol"></span><div class="text-[10px] text-muted" x-text="c.as_of"></div></td>
+                <td :class="cn('px-3 py-2', c.side === 'long' ? 'text-success' : 'text-danger')" x-text="c.side"></td>
+                <td class="px-3 py-2 text-right tabular" x-text="fmtPx(c.close, c.asset_class === 'fx')"></td>
+                <td class="px-3 py-2 text-right tabular text-danger"><span x-text="fmtPx(c.stop, c.asset_class === 'fx')"></span><div class="text-[10px] text-muted" x-text="`${c.stop_pct}%`"></div></td>
+                <td class="px-3 py-2 text-right tabular" x-text="c.target ? fmtPx(c.target, c.asset_class === 'fx') : 'trail'"></td>
+                <td class="px-3 py-2 text-right tabular" x-text="fmtPx(c.stop_dist, c.asset_class === 'fx')"></td>
+                <td class="px-3 py-2 text-right tabular"><span x-text="fmtNumber(c.units, 0)"></span><template hidden x-if="c.asset_class === 'fx'"><div class="text-[10px] text-muted">units</div></template></td>
+                <td class="px-3 py-2 text-right tabular"><span x-text="fmtUsd(c.notional)"></span><div class="text-[10px] text-muted" x-text="`${c.pct_of_equity}% of equity`"></div></td>
+                <td class="px-3 py-2 text-right tabular" x-text="fmtUsd(c.risk_usd)"></td>
+                <template hidden x-if="scanHasAi">
+                  <td class="px-3 py-2 text-right tabular text-xs">
+                    <template hidden x-if="c.ai?.p != null">
+                      <div>
+                        <span :class="c.ai?.pass ? 'text-success' : 'text-warning'" x-text="`${fmtNumber(c.ai?.p * 100, 0)}%`"></span>
+                        <div class="text-[10px] text-muted" x-text="`${c.ai?.pass ? 'take' : 'skip'} · base ${fmtNumber((c.ai?.threshold ?? 0) * 100, 0)}%`"></div>
+                      </div>
+                    </template>
+                    <template hidden x-if="c.ai?.p == null">
+                      <span class="text-muted" :title="c.ai?.error">n/a</span>
+                    </template>
+                  </td>
+                </template>
+                <td class="px-3 py-2 text-xs text-warning">
+                  <template hidden x-if="c.earnings?.date"><div class="text-muted" x-text="`earnings ${c.earnings?.date}`"></div></template>
+                  <template hidden x-for="(w, i) in c.warnings" :key="i"><div x-text="w"></div></template>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </template>
+      <div class="px-4 py-2 text-[11px] text-muted border-t border-line" x-text="scan.note"></div>
+      <template hidden x-if="Object.keys(scan.errors ?? {}).length > 0">
+        <div class="px-4 pb-2 text-[11px] text-muted"
+             x-text="'Skipped: ' + Object.entries(scan.errors ?? {}).map(([k, v]) => `${k} (${v})`).join(', ')"></div>
+      </template>
+    </div>
+  </template>
+
+  <!-- Backtest options -->
+  <div class="card p-4 flex flex-wrap items-end gap-3 text-xs">
+    <div class="text-sm font-medium mr-2">Portfolio backtest options</div>
+    <label class="block">
+      <span class="block text-muted mb-1">From</span>
+      <select x-model.number="startYear" class="bg-surface2 border border-line rounded px-2 py-1">
+        <option value="2005">2005</option>
+        <option value="2010">2010</option>
+        <option value="2015">2015</option>
+        <option value="2020">2020</option>
+      </select>
+    </label>
+    <label class="block">
+      <span class="block text-muted mb-1">Max positions</span>
+      <input type="number" min="1" max="30" x-model.number="maxPos"
+             class="bg-surface2 border border-line rounded px-2 py-1 font-mono w-16">
+    </label>
+    <template hidden x-if="!isFx">
+      <label class="inline-flex items-center gap-2 mb-1">
+        <input type="checkbox" x-model="useEarnings">
+        <span>Never hold through earnings (SEC 8-K dates)</span>
+      </label>
+    </template>
+    <button @click="runFilterEval()" :disabled="feBusy || !cfg"
+            class="rounded border border-accent/40 text-accent hover:bg-accent/10 px-3 py-1.5 inline-flex items-center gap-2 disabled:opacity-50">
+      <i data-lucide="brain-circuit" class="size-4"></i> <span x-text="feBusy ? 'Testing AI filter…' : 'Test AI signal filter'"></span>
+    </button>
+    <template hidden x-if="$store.auth.me && canBot">
+      <button @click="createBot()"
+              class="ml-auto rounded border border-line hover:bg-surface2 px-3 py-1.5 inline-flex items-center gap-2">
+        <i data-lucide="bot" class="size-4"></i> Create paper bot from this setup
+      </button>
+    </template>
+    <template hidden x-if="!canBot">
+      <span class="ml-auto text-muted"
+            x-text="isFx ? 'FX is research-only: the platform\'s broker (Alpaca) has no spot FX.' : 'RSI(2) runs as the classic Trading Bot, not as a swing bot.'"></span>
+    </template>
+  </div>
+  <template hidden x-if="botMsg">
+    <div class="card p-3 text-sm">
+      <span x-text="botMsg"></span> <a href="/trading-bot" class="text-accent underline">Open Trading Bot</a>
+    </div>
+  </template>
+
+  <template hidden x-if="feBusy && !fe">
+    <div class="card p-4 text-sm text-muted">Training a model for every year since 2010 and replaying the portfolio with and without it. This takes up to a minute…</div>
+  </template>
+
+  <!-- FilterEvalView -->
+  <template hidden x-if="fe">
+    <div class="space-y-3" x-data="{ get r() { return fe }, get c() { return fe.comparison }, get cl() { return fe.classification } }">
+      <div :class="cn('card px-4 py-3 border-l-4 space-y-1', feStyle(r.verdict.label).cls)">
+        <div class="flex items-center gap-2 flex-wrap">
+          <i data-lucide="brain-circuit" class="size-4 text-muted"></i>
+          <span class="font-medium" x-text="feStyle(r.verdict.label).title"></span>
+          <span class="text-xs text-muted"
+                x-text="`${r.setup_label} · ${r.universe_label} · walk-forward ${r.first_test_year}→today · ${r.n_labeled} resolved trades to learn from`"></span>
+        </div>
+        <div class="text-sm" x-text="r.verdict.summary"></div>
+        <div class="text-xs text-muted" x-text="feSummary(r)"></div>
+      </div>
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div class="card overflow-x-auto lg:col-span-2">
+          <div class="card-header">Same portfolio, same years, different signal choices</div>
+          <table class="w-full text-sm">
+            <thead class="text-xs uppercase text-muted border-b border-line">
+              <tr><th class="text-left px-3 py-2">Variant</th><th class="text-right px-3 py-2">CAGR</th><th class="text-right px-3 py-2">Sharpe</th>
+                <th class="text-right px-3 py-2">Max DD</th><th class="text-right px-3 py-2">Trades</th><th class="text-right px-3 py-2">E[R]</th></tr>
+            </thead>
+            <tbody>
+              <template hidden x-for="[label, b, note] in feRows(c)" :key="label">
+                <tr class="border-b border-line last:border-0">
+                  <td class="px-3 py-2"><span x-text="label"></span><div class="text-[10px] text-muted" x-text="note"></div></td>
+                  <td :class="cn('px-3 py-2 text-right tabular', changeColor(b.cagr_pct))" x-text="fmtPct(b.cagr_pct)"></td>
+                  <td class="px-3 py-2 text-right tabular" x-text="fmtNumber(b.sharpe)"></td>
+                  <td class="px-3 py-2 text-right tabular text-danger" x-text="fmtPct(b.max_drawdown_pct)"></td>
+                  <td class="px-3 py-2 text-right tabular" x-text="b.n_trades"></td>
+                  <td :class="cn('px-3 py-2 text-right tabular', changeColor(b.expectancy_r))" x-text="fmtNumber(b.expectancy_r, 3)"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+        <div class="card p-4 text-xs space-y-2">
+          <div class="text-sm font-medium">How well it ranks trades</div>
+          <div class="text-muted"
+               x-text="`Kept: ${cl.kept_vs_skipped.kept.n} trades, ${cl.kept_vs_skipped.kept.win_rate_pct}% winners, ${fmtNumber(cl.kept_vs_skipped.kept.mean_r, 3)}R avg. Skipped: ${cl.kept_vs_skipped.skipped.n}, ${cl.kept_vs_skipped.skipped.win_rate_pct}% winners, ${fmtNumber(cl.kept_vs_skipped.skipped.mean_r, 3)}R avg.`"></div>
+          <template hidden x-if="cl.quintiles.length > 0">
+            <table class="w-full font-mono">
+              <thead class="text-muted"><tr><th class="text-left">Score fifth</th><th class="text-right">Win %</th><th class="text-right">Avg R</th></tr></thead>
+              <tbody>
+                <template hidden x-for="q in cl.quintiles" :key="q.quintile">
+                  <tr><td x-text="q.quintile === 1 ? 'lowest' : q.quintile === 5 ? 'highest' : q.quintile"></td>
+                    <td class="text-right" x-text="q.win_rate_pct"></td>
+                    <td :class="cn('text-right', changeColor(q.mean_r))" x-text="fmtNumber(q.mean_r, 3)"></td></tr>
+                </template>
+              </tbody>
+            </table>
+          </template>
+          <div class="text-muted" x-text="`Simpler model check (logistic regression): AUC ${fmtNumber(r.logistic_check.auc.auc, 3)}.`"></div>
+          <template hidden x-if="r.top_features.length > 0">
+            <div class="text-muted" x-text="`Most-used inputs: ${r.top_features.slice(0, 5).map((f) => f.feature.replace(/_/g, ' ')).join(', ')}.`"></div>
+          </template>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <template hidden x-if="btBusy && !bt">
+    <div class="card p-4 text-sm text-muted">Running the first backtest. The first run downloads history and takes up to a minute…</div>
+  </template>
+
+  <!-- BacktestView -->
+  <template hidden x-if="bt">
+    <div class="space-y-4"
+         x-data="{ get r() { return bt }, get m() { return bt.metrics }, get b() { return bt.benchmark_metrics }, get d() { return bt.diagnostics ?? {} } }">
+      <div :class="cn('card px-4 py-3 border-l-4 space-y-2', btStyle(r.verdict.label).cls)">
+        <div class="flex items-center gap-2 flex-wrap">
+          <i data-lucide="alert-triangle" class="size-4 text-muted"></i>
+          <span class="font-medium" x-text="btStyle(r.verdict.label).title"></span>
+          <span class="text-xs text-muted"
+                x-text="`${r.setup_label} · ${r.universe_label} · ${m.start} → ${m.end} · ${r.symbols.length} symbols`"></span>
+        </div>
+        <div class="text-sm" x-text="r.verdict.summary"></div>
+        <ul class="grid md:grid-cols-2 gap-x-6 gap-y-1 text-xs">
+          <template hidden x-for="c in r.verdict.checks" :key="c.key">
+            <li class="flex items-start gap-2">
+              <span x-show="c.pass === true" class="inline-flex shrink-0"><i data-lucide="check-circle-2" class="size-4 text-success shrink-0"></i></span>
+              <span x-show="c.pass === false" class="inline-flex shrink-0"><i data-lucide="x-circle" class="size-4 text-danger shrink-0"></i></span>
+              <span x-show="c.pass !== true && c.pass !== false" class="inline-flex shrink-0"><i data-lucide="minus-circle" class="size-4 text-muted shrink-0"></i></span>
+              <span class="text-muted" x-text="c.detail"></span>
+            </li>
+          </template>
+        </ul>
+      </div>
+
+      <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+        {{ stat("CAGR", "fmtPct(m.cagr_pct)", "changeColor(m.cagr_pct)", "b ? `${b.symbol} ${fmtPct(b.cagr_pct)}` : ''") }}
+        {{ stat("Sharpe", "fmtNumber(m.sharpe)", "''", "b ? `${b.symbol} ${fmtNumber(b.sharpe)}` : `t = ${m.sharpe_t_stat}`") }}
+        {{ stat("Max drawdown", "fmtPct(m.max_drawdown_pct)", "'text-danger'", "b ? `${b.symbol} ${fmtPct(b.max_drawdown_pct)}` : ''") }}
+        {{ stat("Trades", "String(m.n_trades)", "''", "`${m.avg_bars_held ?? '—'} bars avg`") }}
+        {{ stat("Win rate", "`${fmtNumber(m.win_rate_pct, 1)}%`", "''", "`avg win ${fmtNumber(m.avg_win_r)}R · loss ${fmtNumber(m.avg_loss_r)}R`") }}
+        {{ stat("Expectancy", "`${(m.expectancy_r ?? 0) >= 0 ? '+' : ''}${fmtNumber(m.expectancy_r, 3)}R`", "changeColor(m.expectancy_r)", "'per trade, after costs'") }}
+        {{ stat("Profit factor", "fmtNumber(m.profit_factor ?? null)") }}
+        {{ stat("Worst trade", "`${fmtNumber(m.worst_r)}R`", "'text-danger'", "`best ${fmtNumber(m.best_r)}R`") }}
+      </div>
+
+      <div class="card p-4">
+        <div class="text-sm font-medium mb-2"
+             x-text="`Equity ($${fmtNumber(r.equity_curve[0]?.equity ?? 0, 0)} start)` + (b ? ` vs buy & hold ${b.symbol}` : ' — no benchmark for FX')"></div>
+        <div x-effect="bt; drawEquity($el)" style="height: 320px"></div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div class="card overflow-x-auto">
+          <div class="card-header">Stability: first vs second half</div>
+          <table class="w-full text-sm">
+            <thead class="text-xs uppercase text-muted border-b border-line">
+              <tr><th class="text-left px-2 py-2">Period</th><th class="text-right px-2 py-2">CAGR</th><th class="text-right px-2 py-2">Sharpe</th><th class="text-right px-2 py-2">E[R]</th></tr>
+            </thead>
+            <tbody>
+              <template hidden x-for="h in r.halves" :key="h.label">
+                <tr class="border-b border-line last:border-0">
+                  <td class="px-2 py-2 text-xs" x-text="`${h.start.slice(0, 4)}–${h.end.slice(0, 4)}`"></td>
+                  <td :class="cn('px-2 py-2 text-right tabular', changeColor(h.cagr_pct))" x-text="fmtPct(h.cagr_pct)"></td>
+                  <td class="px-2 py-2 text-right tabular" x-text="fmtNumber(h.sharpe)"></td>
+                  <td :class="cn('px-2 py-2 text-right tabular', changeColor(h.expectancy_r))" x-text="fmtNumber(h.expectancy_r, 3)"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+          <div class="px-3 py-2 text-[11px] text-muted border-t border-line"
+               x-text="`Monte Carlo (${r.monte_carlo.n_sims} resamples of the trades): total ${r.monte_carlo.total_r_p5}R to ${r.monte_carlo.total_r_p95}R (5–95%), worst-case drawdown ${r.monte_carlo.max_dd_r_p95}R, ${r.monte_carlo.prob_total_r_le_0_pct}% end ≤ 0.`"></div>
+        </div>
+
+        <div class="card overflow-x-auto max-h-80">
+          <div class="card-header">Calendar years</div>
+          <table class="w-full text-sm">
+            <thead class="text-xs uppercase text-muted border-b border-line">
+              <tr><th class="text-left px-3 py-2">Year</th><th class="text-right px-3 py-2">Strategy</th><template hidden x-if="b"><th class="text-right px-3 py-2" x-text="b.symbol"></th></template></tr>
+            </thead>
+            <tbody>
+              <template hidden x-for="y in r.yearly" :key="y.year">
+                <tr class="border-b border-line last:border-0">
+                  <td class="px-3 py-1.5 tabular" x-text="y.year"></td>
+                  <td :class="cn('px-3 py-1.5 text-right tabular', changeColor(y.strategy_pct))" x-text="fmtPct(y.strategy_pct, 1)"></td>
+                  <template hidden x-if="b"><td :class="cn('px-3 py-1.5 text-right tabular', changeColor(y.benchmark_pct))" x-text="fmtPct(y.benchmark_pct, 1)"></td></template>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card p-4 text-xs space-y-2">
+          <div class="text-sm font-medium">What the engine did</div>
+          <div class="text-muted" x-text="engineSummary(r)"></div>
+          <div class="text-muted" x-text="engineExits(r)"></div>
+          <div class="text-muted" x-text="engineSkipped(r)"></div>
+          <template hidden x-if="r.asset_class === 'equity'">
+            <div class="text-muted" x-text="`Earnings dates found for ${d.earnings_coverage ?? ''}/${d.symbols ?? ''} symbols (ETFs have none).`"></div>
+          </template>
+          <div class="text-muted" x-text="engineCosts(r)"></div>
+          <template hidden x-if="Object.keys(r.errors ?? {}).length > 0">
+            <div class="text-warning" x-text="`No data: ${Object.keys(r.errors).join(', ')}`"></div>
+          </template>
+        </div>
+      </div>
+
+      <div class="card overflow-x-auto max-h-96">
+        <div class="card-header" x-text="`Most recent trades (${Math.min(r.trades.length, 50)} of ${r.n_trades_total})`"></div>
+        <table class="w-full text-sm">
+          <thead class="text-xs uppercase text-muted border-b border-line">
+            <tr>
+              <th class="text-left px-3 py-2">Symbol</th><th class="text-left px-3 py-2">Side</th>
+              <th class="text-left px-3 py-2">Entry</th><th class="text-left px-3 py-2">Exit</th>
+              <th class="text-right px-3 py-2">Bars</th><th class="text-right px-3 py-2">R</th>
+              <th class="text-right px-3 py-2">P&amp;L</th><th class="text-left px-3 py-2">Exit reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template hidden x-for="(t, i) in r.trades.slice(-50).reverse()" :key="i">
+              <tr class="border-b border-line last:border-0">
+                <td class="px-3 py-1.5 font-mono" x-text="t.symbol"></td>
+                <td class="px-3 py-1.5" x-text="t.side"></td>
+                <td class="px-3 py-1.5 text-xs tabular" x-text="`${t.entry_date} @ ${fmtPx(t.entry_price, t.symbol.endsWith('=X'))}`"></td>
+                <td class="px-3 py-1.5 text-xs tabular" x-text="`${t.exit_date} @ ${fmtPx(t.exit_price, t.symbol.endsWith('=X'))}`"></td>
+                <td class="px-3 py-1.5 text-right tabular" x-text="t.bars_held"></td>
+                <td :class="cn('px-3 py-1.5 text-right tabular', changeColor(t.r_multiple))" x-text="fmtNumber(t.r_multiple)"></td>
+                <td :class="cn('px-3 py-1.5 text-right tabular', changeColor(t.pnl))" x-text="fmtUsd(t.pnl)"></td>
+                <td class="px-3 py-1.5 text-xs text-muted" x-text="t.exit_reason.replace(/_/g, ' ')"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </template>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // VERDICT_STYLE in the original; renamed because core.js already has a global VERDICT_STYLE.
+  const SWING_VERDICT_STYLE = {
+    no_edge: { cls: "border-l-danger", title: "No edge" },
+    inconclusive: { cls: "border-l-warning", title: "Inconclusive" },
+    edge_below_benchmark: { cls: "border-l-warning", title: "Real but weak edge" },
+    historical_edge: { cls: "border-l-success", title: "Historical edge" },
+  };
+
+  const SWING_FE_STYLE = {
+    helps: { cls: "border-l-success", title: "AI filter helped" },
+    hurts: { cls: "border-l-danger", title: "AI filter hurt" },
+    no_improvement: { cls: "border-l-warning", title: "AI filter made no reliable difference" },
+    insufficient_data: { cls: "border-l-line", title: "Not enough data" },
+  };
+
+  function btStyle(label) {
+    return SWING_VERDICT_STYLE[label] ?? SWING_VERDICT_STYLE.inconclusive;
+  }
+
+  function feStyle(label) {
+    return SWING_FE_STYLE[label] ?? SWING_FE_STYLE.no_improvement;
+  }
+
+  function fmtUsd(n, digits = 0) {
+    if (n == null) return "—";
+    return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: digits });
+  }
+
+  function fmtPx(n, fx = false) {
+    if (n == null) return "—";
+    return fx ? fmtNumber(n, n >= 20 ? 3 : 5) : fmtNumber(n, 2);
+  }
+
+  // React renders null/undefined as nothing; template strings would print "undefined".
+  const txt = (v) => (v == null ? "" : v);
+
+  // ---- FilterEvalView text ----
+  function feRows(c) {
+    return [
+      ["Setup alone", c.baseline, "every signal taken"],
+      ["With AI filter", c.filtered, `kept ${fmtNumber(c.keep_fraction * 100, 0)}% of signals`],
+      ["Random skips", c.random_filter, "same share skipped at random: what no skill looks like"],
+      ["Perfect foresight", c.oracle_filter, "knows each trade's outcome: the ceiling"],
+    ];
+  }
+
+  function feSummary(r) {
+    const c = r.comparison;
+    const auc = r.classification.auc;
+    return (
+      `Sharpe change ${c.sharpe_diff.diff != null && c.sharpe_diff.diff > 0 ? "+" : ""}${fmtNumber(c.sharpe_diff.diff, 2)} ` +
+      `(90% interval ${fmtNumber(c.sharpe_diff.lo, 2)} to ${fmtNumber(c.sharpe_diff.hi, 2)}). ` +
+      `Prediction quality AUC ${fmtNumber(auc.auc, 3)} (interval ${fmtNumber(auc.lo, 3)}–${fmtNumber(auc.hi, 3)}; 0.5 = coin flip). ` +
+      `The model was retrained every January on trades that had already closed, and scored only the year that followed.`
+    );
+  }
+
+  // ---- BacktestView "What the engine did" text ----
+  function engineSummary(r) {
+    const m = r.metrics;
+    const b = r.benchmark_metrics;
+    const d = r.diagnostics ?? {};
+    return (
+      `${txt(d.signals)} signal-days · ${txt(d.time_in_market_pct)}% of days invested · average gross exposure ` +
+      `${fmtNumber((d.avg_gross_leverage ?? 0) * 100, 0)}% of equity` +
+      (typeof m.correlation_to_benchmark === "number"
+        ? ` · correlation to ${b?.symbol} ${fmtNumber(m.correlation_to_benchmark)}`
+        : "")
+    );
+  }
+
+  function engineExits(r) {
+    return "Exits: " + Object.entries(r.metrics.exit_reasons ?? {}).map(([k, n]) => `${k.replace(/_/g, " ")} ${n}`).join(" · ");
+  }
+
+  function engineSkipped(r) {
+    const d = r.diagnostics ?? {};
+    const skipped = d.skipped_at_fill ?? {};
+    const list = Object.entries(skipped).filter(([, n]) => n > 0).map(([k, n]) => `${k.replace(/_/g, " ")} ${n}`).join(" · ");
+    return `Not taken at the open: ${list || "none"}` + (d.skipped_earnings ? ` · earnings blackout ${d.skipped_earnings}` : "");
+  }
+
+  function engineCosts(r) {
+    const cfg = (r.diagnostics ?? {}).config;
+    return (
+      `Costs: ${txt(cfg?.commission_bps)} bps commission + ${txt(cfg?.slippage_bps)} bps slippage per fill` +
+      (cfg?.financing_bps_per_year ? `, ${cfg.financing_bps_per_year} bps/yr financing` : "") +
+      `. Idle cash earns nothing here.`
+    );
+  }
+
+  function swingPage() {
+    return {
+      cfg: null,
+      err: null,
+
+      // scanner
+      setup: "breakout",
+      universe: "etfs",
+      custom: "",
+      equity: 25_000,
+      riskPct: 1.0,
+      scan: null,
+      scanning: false,
+      aiScan: false,
+
+      // ML signal filter evaluation
+      fe: null,
+      feBusy: false,
+
+      // backtest
+      bt: null,
+      btBusy: false,
+      startYear: 2005,
+      maxPos: 8,
+      useEarnings: true,
+
+      botMsg: null,
+
+      init() {
+        api.swingConfig()
+          .then((c) => {
+            this.cfg = c;
+            // Show the most defensible configuration's evidence on first load.
+            if (!this.bt) this.runBacktest();
+          })
+          .catch((e) => (this.err = errMsg(e)));
+      },
+
+      get symbols() {
+        return this.custom.split(/[\s,]+/).map((s) => s.trim().toUpperCase()).filter(Boolean);
+      },
+      get uni() {
+        return this.universe === "custom" ? null : this.cfg?.universes[this.universe];
+      },
+      get isFx() {
+        return this.universe === "custom" ? this.symbols.some((s) => s.endsWith("=X")) : this.uni?.asset_class === "fx";
+      },
+      get canBot() {
+        return !this.isFx && this.setup !== "rsi2";
+      },
+      get scanHasAi() {
+        return (this.scan?.candidates ?? []).some((c) => c.ai);
+      },
+
+      universeArgs() {
+        return this.universe === "custom" ? { symbols: this.symbols, universe: null } : { universe: this.universe };
+      },
+
+      async runScan() {
+        this.scanning = true;
+        this.err = null;
+        try {
+          this.scan = await api.swingScan({
+            setup: this.setup, equity: this.equity, risk_pct: this.riskPct, ai_filter: this.aiScan,
+            ...this.universeArgs(),
+          });
+        } catch (e) {
+          this.err = errMsg(e);
+        } finally {
+          this.scanning = false;
+        }
+      },
+
+      async runBacktest() {
+        this.btBusy = true;
+        this.err = null;
+        try {
+          this.bt = await api.swingBacktest({
+            setup: this.setup, start: `${this.startYear}-01-01`, use_earnings: this.useEarnings,
+            config: { risk_per_trade_pct: this.riskPct, max_positions: this.maxPos },
+            ...this.universeArgs(),
+          });
+        } catch (e) {
+          this.err = errMsg(e);
+        } finally {
+          this.btBusy = false;
+        }
+      },
+
+      async runFilterEval() {
+        this.feBusy = true;
+        this.err = null;
+        try {
+          this.fe = await api.swingFilterEval({
+            setup: this.setup, use_earnings: this.useEarnings,
+            ...this.universeArgs(),
+          });
+        } catch (e) {
+          this.err = errMsg(e);
+        } finally {
+          this.feBusy = false;
+        }
+      },
+
+      async createBot() {
+        if (!Alpine.store("auth").me) return;
+        this.botMsg = null;
+        const body = {
+          name: `Swing ${this.setup} · ${this.universe === "custom" ? "custom" : this.uni?.label ?? this.universe}`,
+          bot_type: "trader",
+          dsl: { kind: `swing_${this.setup}` },
+          universe: this.universe === "custom" ? this.symbols : this.uni?.symbols,
+        };
+        try {
+          await authedFetch("/bot/bots", { method: "POST", body: JSON.stringify(body) });
+          this.botMsg = "Paper bot created (disarmed). Review its limits, then arm it on the Trading Bot page.";
+        } catch (e) {
+          this.botMsg = `Could not create bot: ${errMsg(e)}`;
+        }
+      },
+
+      // <EquityChart strategy={r.equity_curve} benchmark={r.benchmark_curve} />
+      drawEquity(el) {
+        const r = Alpine.raw(this.bt);
+        if (r) equityChart(el, r.equity_curve, r.benchmark_curve);
+      },
+    };
+  }
+</script>
+{% endblock %}

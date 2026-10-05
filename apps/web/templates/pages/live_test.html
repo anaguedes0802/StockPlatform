@@ -1,0 +1,314 @@
+{% extends "base.html" %}
+
+{# Port of app/live-test/page.tsx. #}
+
+{# <Stat label value cls/>: value / cls are JS expressions in the Alpine scope. #}
+{% macro stat(label, value, cls="''") -%}
+<div class="card p-3">
+  <div class="text-[10px] uppercase tracking-wide text-muted">{{ label }}</div>
+  <div :class="cn('font-mono tabular text-lg mt-0.5', {{ cls }})" x-text="{{ value }}"></div>
+</div>
+{%- endmacro %}
+
+{# Recharts curve (strategy_pct vs spy_pct, % axis) inside a "card p-4 h-72". #}
+{% macro curve_chart(expr, strategy_label) -%}
+<div class="card p-4 h-72">
+  <div x-effect="drawCurve($el, {{ expr }}, '{{ strategy_label }}')" style="height: 256px"></div>
+</div>
+{%- endmacro %}
+
+{% block content %}
+<div x-data="liveTestPage()" class="p-6 space-y-6 max-w-6xl">
+  <div class="flex items-end justify-between flex-wrap gap-3">
+    <div>
+      <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2">
+        <i data-lucide="activity" class="size-6 text-accent"></i> Live test (paper)
+      </h1>
+      <p class="text-sm text-muted mt-1 max-w-3xl">
+        The one test a backtest can't fake: running the strategy forward. Each month the earnings-surprise + momentum
+        ranking picks the top 10% of the S&amp;P 500+400 (or short-term Treasuries when SPY is below its 10-month
+        average), filled at real prices with fake money, by the built-in simulator (or your Alpaca <b>paper</b>
+        account). Compare it with SPY after 6–12 months. Below it, a replay of the same rules on 2016–today shows what
+        they did historically. <a href="/screener" class="underline hover:text-accent">Strategy details</a>
+      </p>
+    </div>
+    <button @click="load()" class="rounded border border-line px-3 py-1.5 text-sm inline-flex items-center gap-1 hover:text-accent">
+      <i data-lucide="refresh-cw" class="size-4"></i> Refresh
+    </button>
+  </div>
+
+  <template hidden x-if="status">
+    <div class="flex items-center gap-2 text-xs text-muted">
+      <i data-lucide="shield" class="size-3.5 text-accent"></i>
+      <span x-text="status?.broker === 'alpaca'
+        ? (status?.is_paper ? 'Broker: Alpaca paper account (no real money)' : 'Not a paper endpoint: the test refuses to run.')
+        : 'Broker: built-in simulator: fills at live prices + 5 bps slippage + 1 bp commission (no real money)'"></span>
+    </div>
+  </template>
+  <template hidden x-if="err">
+    <div class="card p-3 text-sm text-danger break-all"><i data-lucide="alert-circle" class="size-4 inline mr-1"></i><span x-text="err"></span></div>
+  </template>
+  <template hidden x-if="msg">
+    <div class="card p-3 text-sm text-emerald-300" x-text="msg"></div>
+  </template>
+
+  <template hidden x-if="running">
+    <div class="space-y-6">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {{ stat("Strategy value", "money(status?.value)") }}
+        {{ stat("Return", "pct(status?.return_pct)", "(status?.return_pct ?? 0) >= 0 ? 'text-emerald-300' : 'text-rose-300'") }}
+        {{ stat("SPY same period", "pct(status?.spy_return_pct)") }}
+        {{ stat("Ahead of SPY", "pct(ahead)", "ahead == null ? '' : ahead >= 0 ? 'text-emerald-300' : 'text-rose-300'") }}
+      </div>
+      <div class="text-xs text-muted"
+           x-text="`Started ${status?.started_at?.slice(0, 10) ?? ''} with ${money(status?.initial_capital)} · next rebalance after ${status?.next_rebalance_after?.slice(0, 10) ?? '—'} · a few months of results are mostly noise: judge it after 6–12.`"></div>
+      <template hidden x-if="(status?.curve?.length ?? 0) > 1">
+        {{ curve_chart("status?.curve", "Strategy") }}
+      </template>
+      <div class="card overflow-x-auto">
+        <div class="px-4 py-3 font-medium border-b border-line"
+             x-text="`Holdings (${status?.positions?.length ?? 0}) · cash ${money(status?.cash)}`"></div>
+        <table class="w-full text-sm">
+          <thead class="text-[11px] uppercase tracking-wide text-muted">
+            <tr class="border-b border-line">
+              <th class="px-3 py-2 text-left">Symbol</th><th class="px-3 py-2 text-right">Qty</th>
+              <th class="px-3 py-2 text-right">Price</th><th class="px-3 py-2 text-right">Value</th>
+              <th class="px-3 py-2 text-right">P/L</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template hidden x-for="p in status?.positions ?? []" :key="p.symbol">
+              <tr class="border-b border-line/40 last:border-0">
+                <td class="px-3 py-1.5"><a :href="`/stocks/${p.symbol}`" class="font-mono hover:text-accent" x-text="p.symbol"></a></td>
+                <td class="px-3 py-1.5 text-right tabular" x-text="p.qty.toFixed(3)"></td>
+                <td class="px-3 py-1.5 text-right tabular" x-text="p.price?.toFixed(2) ?? '—'"></td>
+                <td class="px-3 py-1.5 text-right tabular" x-text="money(p.market_value)"></td>
+                <td :class="cn('px-3 py-1.5 text-right tabular', (p.pnl_pct ?? 0) >= 0 ? 'text-emerald-300' : 'text-rose-300')" x-text="pct(p.pnl_pct)"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+      <template hidden x-if="(status?.rebalances?.length ?? 0) > 0">
+        <div class="card p-4 text-xs space-y-1.5">
+          <div class="font-medium text-sm mb-1">Rebalances</div>
+          <template hidden x-for="r in status?.rebalances ?? []" :key="r.id">
+            <div class="flex justify-between gap-3">
+              <span class="tabular text-muted" x-text="r.at.slice(0, 16).replace('T', ' ')"></span>
+              <span x-text="`${r.risk_on ? 'risk-on' : 'risk-off'} · ${r.targets.length} names · ${r.note?.n_orders ?? 0} orders${r.note?.errors?.length ? ` · ${r.note.errors.length} errors` : ''}`"></span>
+              <span class="tabular" x-text="money(r.value_before)"></span>
+            </div>
+          </template>
+        </div>
+      </template>
+    </div>
+  </template>
+
+  <template hidden x-if="status && !running">
+    <div class="card p-4 text-sm text-muted">
+      The forward test hasn't started. Review the plan, then start it. After that it rebalances itself about once a
+      month (run <code class="text-text">scripts/paper_strategy.py rebalance --execute</code> daily from cron; it only
+      trades when a rebalance is due).
+    </div>
+  </template>
+
+  <!-- ReplayView -->
+  <template hidden x-if="replay">
+    <div class="space-y-2">
+      <h2 class="text-lg font-semibold tracking-tight">What these exact rules did in the past</h2>
+      <template hidden x-if="!replay?.segments">
+        <div class="card p-4 text-sm text-muted" x-text="replay?.message"></div>
+      </template>
+      <template hidden x-if="replay?.segments">
+        <div class="space-y-3">
+          <div class="card overflow-x-auto">
+            <div class="px-4 py-3 border-b border-line">
+              <div class="font-medium" x-text="`Historical replay: same rules, ${replay?.start} → ${replay?.end}`"></div>
+              <div class="text-xs text-muted mt-0.5"
+                   x-text="`${money(replay?.capital)} → ${money(replay?.final_value)} · ${replay?.n_rebalances} rebalances · ${replay?.n_orders} orders · risk-on ${replay?.time_risk_on_pct}% of rebalances · avg turnover ${replay?.avg_turnover_pct}% per rebalance`"></div>
+            </div>
+            <table class="w-full text-sm">
+              <thead class="text-[11px] uppercase tracking-wide text-muted">
+                <tr class="border-b border-line">
+                  <th class="px-3 py-2 text-left">Period</th>
+                  <th class="px-3 py-2 text-right">Strategy / yr</th><th class="px-3 py-2 text-right">SPY / yr</th>
+                  <th class="px-3 py-2 text-right">Sharpe</th><th class="px-3 py-2 text-right">SPY Sharpe</th>
+                  <th class="px-3 py-2 text-right">Max DD</th><th class="px-3 py-2 text-right">SPY max DD</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template hidden x-for="[k, v] in Object.entries(replay?.segments ?? {})" :key="k">
+                  <tr class="border-b border-line/40 last:border-0">
+                    <td class="px-3 py-1.5" x-text="k"></td>
+                    <td :class="cn('px-3 py-1.5 text-right tabular', (v.strategy.cagr_pct ?? 0) >= (v.spy.cagr_pct ?? 0) ? 'text-emerald-300' : 'text-rose-300')" x-text="pct(v.strategy.cagr_pct)"></td>
+                    <td class="px-3 py-1.5 text-right tabular text-muted" x-text="pct(v.spy.cagr_pct)"></td>
+                    <td class="px-3 py-1.5 text-right tabular" x-text="v.strategy.sharpe ?? '—'"></td>
+                    <td class="px-3 py-1.5 text-right tabular text-muted" x-text="v.spy.sharpe ?? '—'"></td>
+                    <td class="px-3 py-1.5 text-right tabular" x-text="pct(v.strategy.max_drawdown_pct)"></td>
+                    <td class="px-3 py-1.5 text-right tabular text-muted" x-text="pct(v.spy.max_drawdown_pct)"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+          <template hidden x-if="(replay?.curve?.length ?? 0) > 1">
+            {{ curve_chart("replay?.curve", "Strategy (replay)") }}
+          </template>
+          <template hidden x-if="replay?.yearly">
+            <div class="card p-4">
+              <div class="text-sm font-medium mb-2">Year by year</div>
+              <div class="grid grid-cols-3 sm:grid-cols-6 lg:grid-cols-11 gap-2 text-xs">
+                <template hidden x-for="y in replay?.yearly ?? []" :key="y.year">
+                  <div class="bg-surface2 rounded px-2 py-1.5">
+                    <div class="text-muted" x-text="y.year"></div>
+                    <div :class="cn('font-mono tabular', y.strategy_pct >= y.spy_pct ? 'text-emerald-300' : 'text-rose-300')" x-text="pct(y.strategy_pct)"></div>
+                    <div class="font-mono tabular text-muted text-[10px]" x-text="`SPY ${pct(y.spy_pct)}`"></div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+          <template hidden x-if="replay?.caveats">
+            <ul class="text-xs text-muted list-disc pl-5 space-y-1"><template hidden x-for="(c, i) in replay?.caveats ?? []" :key="i"><li x-text="c"></li></template></ul>
+          </template>
+        </div>
+      </template>
+    </div>
+  </template>
+
+  <div class="flex gap-2 flex-wrap">
+    <button @click="loadPlan(false)" :disabled="planLoading"
+            class="rounded border border-line px-3 py-1.5 text-sm inline-flex items-center gap-1 hover:text-accent disabled:opacity-50">
+      <span :class="cn('inline-flex', planLoading && 'animate-spin')"><i data-lucide="refresh-cw" class="size-4"></i></span>
+      <span x-text="plan ? 'Reload plan' : `Show this month's plan`"></span>
+    </button>
+    <template hidden x-if="status && (!running || status?.due)">
+      <button @click="start()" :disabled="busy || !status?.is_paper"
+              class="rounded border border-accent text-accent px-3 py-1.5 text-sm inline-flex items-center gap-1 hover:bg-accent/10 disabled:opacity-50">
+        <i data-lucide="play" class="size-4"></i> <span x-text="running ? 'Rebalance now (due)' : 'Start paper test'"></span>
+      </button>
+    </template>
+  </div>
+  <template hidden x-if="planLoading && !plan">
+    <div class="text-xs text-muted">Ranking ~900 stocks. The first run of the day can take several minutes…</div>
+  </template>
+
+  <!-- PlanView -->
+  <template hidden x-if="plan">
+    <div class="card p-4 space-y-3">
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <div class="font-medium">This month's plan <span class="text-xs text-muted" x-text="`(ranking as of ${plan?.as_of})`"></span></div>
+        <span :class="cn('pill border text-xs', plan?.risk_on ? 'border-emerald-500/40 text-emerald-300' : 'border-amber-500/40 text-amber-300')"
+              x-text="plan?.risk_on ? 'Risk-on: SPY above 10-month average' : 'Risk-off: SPY below 10-month average'"></span>
+      </div>
+      <div class="text-xs text-muted"
+           x-text="`${plan?.regime?.allocation ?? ''} · ranked ${plan?.n_ranked ?? ''} of ${plan?.universe_size} S&P 500+400 stocks · earnings data for ${plan?.earnings_coverage != null ? `${Math.round(plan.earnings_coverage * 100)}%` : '—'} · ~${money(plan?.target_notional_each)} per name`"></div>
+      <div class="flex flex-wrap gap-1.5">
+        <template hidden x-for="s in plan?.targets ?? []" :key="s">
+          <a :href="`/stocks/${s}`" class="font-mono text-xs rounded border border-line px-2 py-0.5 hover:text-accent" x-text="s"></a>
+        </template>
+      </div>
+      <div class="grid md:grid-cols-2 gap-3 text-xs">
+        <div>
+          <div class="text-muted mb-1" x-text="`Sells (${plan?.sells.length})`"></div>
+          <template hidden x-if="plan?.sells.length === 0"><div class="text-muted">—</div></template>
+          <template hidden x-for="o in plan?.sells ?? []" :key="o.symbol">
+            <div class="flex justify-between"><span class="font-mono" x-text="o.symbol"></span><span class="text-muted" x-text="o.reason"></span></div>
+          </template>
+        </div>
+        <div>
+          <div class="text-muted mb-1" x-text="`Buys (${plan?.buys.length})`"></div>
+          <div class="max-h-48 overflow-auto">
+            <template hidden x-for="o in plan?.buys ?? []" :key="o.symbol">
+              <div class="flex justify-between"><span class="font-mono" x-text="o.symbol"></span><span class="tabular" x-text="money(o.notional)"></span></div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </div>
+  </template>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function money(v) {
+    return v == null ? "—" : `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  }
+  function pct(v) {
+    return v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(2)}%`;
+  }
+
+  function liveTestPage() {
+    return {
+      status: null,
+      replay: null,
+      plan: null,
+      planLoading: false,
+      busy: false,
+      msg: null,
+      err: null,
+
+      init() {
+        this.load();
+      },
+
+      get running() {
+        return this.status?.running;
+      },
+      get ahead() {
+        return this.running && this.status?.spy_return_pct != null
+          ? (this.status.return_pct ?? 0) - this.status.spy_return_pct
+          : null;
+      },
+
+      async load() {
+        this.err = null;
+        try {
+          this.status = await api.paperStatus();
+        } catch (e) {
+          this.err = errMsg(e);
+        }
+        api.paperReplay().then((r) => (this.replay = r)).catch(() => (this.replay = null));
+      },
+
+      async loadPlan(refresh = false) {
+        this.planLoading = true;
+        try {
+          this.plan = await api.paperPlan(refresh);
+        } catch (e) {
+          this.err = errMsg(e);
+        } finally {
+          this.planLoading = false;
+        }
+      },
+
+      // Submits paper orders (POST /paper-strategy/rebalance) after a browser confirm().
+      async start() {
+        if (!confirm("Submit this month's orders to the Alpaca PAPER account (fake money)?")) return;
+        this.busy = true;
+        this.msg = null;
+        this.err = null;
+        try {
+          const r = await api.paperRebalance(!this.status?.running);
+          this.msg = r.executed ? `Submitted ${r.orders?.length ?? 0} paper orders.` : (r.reason ?? "Nothing to do.");
+          await this.load();
+        } catch (e) {
+          this.err = e?.status === 401 ? "Sign in to start the paper test." : errMsg(e);
+        } finally {
+          this.busy = false;
+        }
+      },
+
+      // Recharts <LineChart> of {day, strategy_pct, spy_pct} with a % y-axis.
+      drawCurve(el, curve, strategyLabel) {
+        const pts = plain(Alpine.raw(curve)) || [];
+        lineChart(el, [
+          { label: strategyLabel, data: pts.map((p) => ({ x: p.day, y: p.strategy_pct })), color: THEME.accent },
+          { label: "SPY", data: pts.map((p) => ({ x: p.day, y: p.spy_pct })), color: THEME.muted },
+        ], { height: 256, yFormat: (v) => `${v}%` });
+      },
+    };
+  }
+</script>
+{% endblock %}
