@@ -63,6 +63,16 @@ def test_api_proxy_forwards_method_path_query_body_and_auth():
                     "body": b'{"symbol":"AAPL"}', "auth": "Bearer t0k"}
 
 
+def test_api_proxy_passes_204_without_a_body():
+    app.state.api = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(204)), base_url="http://api"
+    )
+    r = client.delete("/api/chat/sessions/abc")
+    assert r.status_code == 204
+    assert r.content == b""
+    assert "transfer-encoding" not in r.headers
+
+
 def test_api_proxy_reports_unreachable_api():
     def down(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused", request=request)

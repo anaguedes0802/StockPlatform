@@ -88,6 +88,10 @@ async def api_proxy(path: str, request: Request) -> Response:
     # aiter_bytes() hands back decoded bytes, so the upstream encoding header goes too.
     out_headers = {k: v for k, v in resp.headers.items()
                    if k.lower() not in _HOP_BY_HOP and k.lower() != "content-encoding"}
+    if resp.status_code in (204, 304):
+        # No body allowed: streaming one makes browsers abort the response.
+        await resp.aclose()
+        return Response(status_code=resp.status_code, headers=out_headers)
     return StreamingResponse(
         resp.aiter_bytes(), status_code=resp.status_code, headers=out_headers,
         background=BackgroundTask(resp.aclose),
