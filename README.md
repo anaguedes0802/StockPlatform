@@ -44,7 +44,7 @@ The interesting part is the research. Every idea, from XGBoost forecasts to copy
 - **Backend:** FastAPI modular monolith with SQLAlchemy 2 + Alembic, Redis caching and token-bucket rate limiting, JWT with refresh-token rotation and TOTP 2FA.
 - **Engines:** a portfolio-level backtester (shared capital, gap-aware stops, costs, earnings blackout, Monte Carlo, split halves, verdict checks) and a simulated broker for A/B paper tests.
 - **Web UI in Python:** FastAPI + Jinja2 templates with Tailwind, Alpine.js and TradingView Lightweight Charts. No Node toolchain.
-- **Tests and CI:** 267 API tests and the web UI tests run in GitHub Actions.
+- **Tests and CI:** 271 API tests and the web UI tests run in GitHub Actions.
 
 ---
 
@@ -93,7 +93,7 @@ StockPlatform/
 │   │   ├── app/backtest/    single-asset and portfolio-level backtest engines
 │   │   ├── app/swing_agent/ multi-timeframe research pipeline (point-in-time data, regimes, 15m engine)
 │   │   ├── app/routers/     REST + SSE + WebSocket endpoints
-│   │   └── tests/           267 tests (no network)
+│   │   └── tests/           271 tests (no network)
 │   └── web/                 Python web UI (FastAPI + Jinja2 templates, Tailwind, Alpine.js)
 ├── scripts/                 reproducible research runs (walk-forward, studies, backtests)
 ├── BACKTEST_RESULTS.md      every experiment, method and number
@@ -135,7 +135,7 @@ On macOS, XGBoost needs OpenMP: `brew install libomp`.
 **Tests**
 
 ```bash
-cd apps/api && pytest      # 267 tests, offline
+cd apps/api && pytest      # 271 tests, offline
 cd apps/web && pytest      # every page renders + /api proxy
 ```
 

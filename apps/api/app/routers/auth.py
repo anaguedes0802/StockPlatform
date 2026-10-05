@@ -111,7 +111,7 @@ def login(payload: LoginIn, db: Session = Depends(get_db)) -> TokenPair:
     user = db.scalar(select(User).where(User.email == payload.email))
     if not user or not user.password_hash or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
-    if user.totp_secret:
+    if user.totp_enabled:
         if not payload.totp_code:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "totp_required")
         if not pyotp.TOTP(user.totp_secret).verify(payload.totp_code, valid_window=1):
@@ -162,7 +162,7 @@ def me(user: User = Depends(get_current_user)) -> MeOut:
         email=user.email,
         display_name=user.display_name,
         role=user.role,
-        totp_enabled=bool(user.totp_secret),
+        totp_enabled=user.totp_enabled,
     )
 
 
@@ -171,8 +171,13 @@ def me(user: User = Depends(get_current_user)) -> MeOut:
 
 @router.post("/2fa/setup", response_model=TotpSetupOut)
 def totp_setup(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> TotpSetupOut:
-    """Generate a TOTP secret and return its otpauth URL. Not yet active — call /2fa/verify with a code to activate."""
-    if user.totp_secret:
+    """Generate a TOTP secret and return its otpauth URL.
+
+    The secret is only pending: logins keep working without a code until
+    /2fa/verify confirms the authenticator, so an abandoned setup can't lock the
+    user out. Calling setup again replaces a pending secret.
+    """
+    if user.totp_enabled:
         raise HTTPException(409, "2FA already enabled — disable first to re-provision")
     secret = pyotp.random_base32()
     user.totp_secret = secret
@@ -187,11 +192,13 @@ def totp_verify(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Verify a TOTP code. Confirms enrollment; required on subsequent logins."""
+    """Verify a TOTP code. Activates 2FA; required on subsequent logins."""
     if not user.totp_secret:
         raise HTTPException(400, "2FA not set up — call /2fa/setup first")
     if not pyotp.TOTP(user.totp_secret).verify(payload.code, valid_window=1):
         raise HTTPException(401, "invalid code")
+    user.totp_enabled = True
+    db.commit()
     return {"ok": True, "totp_enabled": True}
 
 
@@ -201,10 +208,14 @@ def totp_disable(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
-    if not user.totp_secret:
+    if not user.totp_enabled:
+        # Nothing to disable; drop any pending enrolment.
+        user.totp_secret = None
+        db.commit()
         return {"ok": True, "totp_enabled": False}
     if not pyotp.TOTP(user.totp_secret).verify(payload.code, valid_window=1):
         raise HTTPException(401, "invalid code")
     user.totp_secret = None
+    user.totp_enabled = False
     db.commit()
     return {"ok": True, "totp_enabled": False}

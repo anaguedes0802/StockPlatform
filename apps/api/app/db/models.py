@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
 )
 
@@ -84,6 +85,9 @@ class User(Base, TimestampMixin):
     password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     display_name: Mapped[str | None] = mapped_column(String(120))
     totp_secret: Mapped[str | None] = mapped_column(String(64))
+    # 2FA is enforced only once a code from the authenticator has been verified;
+    # until then totp_secret is a pending enrolment.
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
     role: Mapped[str] = mapped_column(String(16), default="user")
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
