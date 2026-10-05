@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+
+{% macro stat(label, value) -%}
+<div class="card p-4">
+  <div class="text-xs text-muted">{{ label }}</div>
+  <div class="text-2xl font-mono tabular mt-1" x-text="{{ value }}"></div>
+</div>
+{%- endmacro %}
+
+{# StatCell: `s` is a JS expression for a TrackStat ({n, avg, win_rate, avg_vs_spy, beat_spy_rate}). #}
+{% macro stat_cell(s) -%}
+<template x-if="!{{ s }} || {{ s }}.n === 0">
+  <td class="px-4 py-2 text-right text-muted tabular">—</td>
+</template>
+<template x-if="{{ s }} && {{ s }}.n !== 0">
+  <td class="px-4 py-2 text-right tabular" x-data="{ get s() { return {{ s }} } }">
+    <div :class="cn('font-mono', statColor(s.avg))" x-text="`${s.avg > 0 ? '+' : ''}${s.avg}%`"></div>
+    <div class="text-[10px] text-muted" x-text="`${s.win_rate}% win · n=${s.n}`"></div>
+    <template x-if="s.avg_vs_spy != null">
+      <div :class="cn('text-[10px] font-mono', statColor(s.avg_vs_spy))"
+           x-text="`${s.avg_vs_spy > 0 ? '+' : ''}${s.avg_vs_spy}% vs SPY · ${s.beat_spy_rate}% beat`"></div>
+    </template>
+  </td>
+</template>
+{%- endmacro %}
+
+{% block content %}
+<div x-data="trackRecordPage()" class="p-6 space-y-6">
+  <div class="flex items-end justify-between flex-wrap gap-3">
+    <div>
+      <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2">
+        <i data-lucide="trophy" class="size-6 text-accent"></i> Track record
+      </h1>
+      <p class="text-sm text-muted mt-1">
+        The platform's own honest batting average. Every name the opportunity engine surfaces is logged,
+        then graded by its real forward return at 1, 4 and 12 weeks. No cherry-picking.
+      </p>
+    </div>
+    <button @click="load()" class="rounded border border-line px-3 py-1.5 text-sm inline-flex items-center gap-1 hover:text-accent">
+      <span x-show="!loading" class="contents"><i data-lucide="refresh-cw" class="size-4"></i></span>
+      <span x-show="loading" class="contents"><i data-lucide="refresh-cw" class="size-4 animate-spin"></i></span>
+      Refresh
+    </button>
+  </div>
+
+  <template x-if="err">
+    <div class="card p-3 text-sm text-danger break-all" x-text="err"></div>
+  </template>
+
+  <!-- React fragment: an inner space-y-6 keeps the same spacing -->
+  <template x-if="data">
+    <div class="space-y-6">
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+        {{ stat("Names tracked", "String(data.n_records)") }}
+        {{ stat("Matured (≥1w)", "String(data.n_matured_1w)") }}
+        {{ stat("Strategies", "String(data.by_strategy.length)") }}
+      </div>
+
+      <template x-if="data.by_strategy.length === 0">
+        <div class="card p-6 text-sm text-muted text-center">
+          No records yet. As the opportunity engine surfaces names, they get logged here and graded once a week has passed.
+        </div>
+      </template>
+      <template x-if="data.by_strategy.length > 0">
+        <div class="card overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="text-xs uppercase tracking-wide text-muted border-b border-line">
+              <tr>
+                <th class="text-left px-4 py-2">Strategy</th>
+                <th class="text-right px-4 py-2">Surfaced</th>
+                <th class="text-right px-4 py-2">1 week</th>
+                <th class="text-right px-4 py-2">4 weeks</th>
+                <th class="text-right px-4 py-2">12 weeks</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="row in data.by_strategy" :key="row.strategy">
+                <tr class="border-b border-line last:border-0 hover:bg-surface2">
+                  <td class="px-4 py-2 font-medium" x-text="row.strategy.replace(/_/g, ' ')"></td>
+                  <td class="px-4 py-2 text-right tabular text-muted" x-text="row.n_surfaced || 0"></td>
+                  {{ stat_cell("row['1w']") }}
+                  {{ stat_cell("row['4w']") }}
+                  {{ stat_cell("row['12w']") }}
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </template>
+
+      <p class="text-xs text-muted leading-relaxed max-w-3xl" x-text="data.note"></p>
+    </div>
+  </template>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function statColor(avg) {
+    if (avg == null) return "text-muted";
+    return avg > 0 ? "text-emerald-300" : avg < 0 ? "text-rose-300" : "text-muted";
+  }
+
+  function trackRecordPage() {
+    return {
+      data: null,
+      err: null,
+      loading: true,
+
+      init() {
+        this.load();
+      },
+
+      async load() {
+        this.loading = true;
+        this.err = null;
+        try {
+          this.data = await api.trackRecord();
+        } catch (e) {
+          this.err = errMsg(e);
+        } finally {
+          this.loading = false;
+        }
+      },
+    };
+  }
+</script>
+{% endblock %}

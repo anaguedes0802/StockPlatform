@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div x-data="screenerPage()" class="p-6 space-y-6">
+  <div>
+    <h1 class="text-2xl font-semibold tracking-tight">Screener</h1>
+    <p class="text-sm text-muted mt-1">Filter the universe by asset class, sector, and free-text query.</p>
+  </div>
+
+  <div class="card p-4 grid grid-cols-1 md:grid-cols-12 gap-3">
+    <input x-model="q" placeholder="Symbol or name…"
+           class="md:col-span-6 bg-surface2 border border-line rounded px-3 py-2 text-sm">
+    <select x-model="assetClass" class="md:col-span-3 bg-surface2 border border-line rounded px-3 py-2 text-sm">
+      <option value="">All asset classes</option>
+      <template x-for="a in assetClasses" :key="a">
+        <option :value="a" x-text="a"></option>
+      </template>
+    </select>
+    <select x-model="sector" class="md:col-span-3 bg-surface2 border border-line rounded px-3 py-2 text-sm">
+      <option value="">All sectors</option>
+      <template x-for="s in sectors" :key="s">
+        <option :value="s" x-text="s"></option>
+      </template>
+    </select>
+  </div>
+
+  <div class="card overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="text-xs uppercase tracking-wide text-muted border-b border-line">
+        <tr>
+          <th class="text-left px-4 py-2">Symbol</th>
+          <th class="text-left px-4 py-2">Name</th>
+          <th class="text-left px-4 py-2">Exchange</th>
+          <th class="text-left px-4 py-2">Asset class</th>
+          <th class="text-left px-4 py-2">Sector</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="h in hits" :key="h.symbol">
+          <tr class="border-b border-line last:border-0 hover:bg-surface2">
+            <td class="px-4 py-2 font-mono">
+              <a :href="'/stocks/' + h.symbol" class="hover:text-accent" x-text="h.symbol"></a>
+            </td>
+            <td class="px-4 py-2 text-muted truncate max-w-xs" x-text="h.name ?? ''"></td>
+            <td class="px-4 py-2 text-muted" x-text="h.exchange ?? ''"></td>
+            <td class="px-4 py-2"><span class="pill bg-surface2 border border-line text-muted" x-text="h.asset_class"></span></td>
+            <td class="px-4 py-2 text-muted" x-text="h.sector ?? '—'"></td>
+          </tr>
+        </template>
+        <template x-if="hits.length === 0">
+          <tr><td class="px-4 py-3 text-sm text-muted" colspan="5" x-text="loading ? 'Loading…' : 'No matches.'"></td></tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function screenerGet(path) {
+    const r = await fetch(`/api${path}`, { cache: "no-store" });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  }
+
+  function screenerPage() {
+    return {
+      q: "",
+      assetClass: "",
+      sector: "",
+      sectors: [],
+      assetClasses: [],
+      hits: [],
+      loading: true,
+      seq: 0,
+
+      init() {
+        screenerGet("/stocks/_universe/sectors").then((r) => (this.sectors = r)).catch(() => {});
+        screenerGet("/stocks/_universe/asset-classes").then((r) => (this.assetClasses = r)).catch(() => {});
+        this.$watch("q", () => this.search());
+        this.$watch("assetClass", () => this.search());
+        this.$watch("sector", () => this.search());
+        this.search();
+      },
+
+      // Re-runs on every change of q / asset class / sector (same as the original effect).
+      search() {
+        const params = new URLSearchParams();
+        if (this.q) params.set("q", this.q);
+        if (this.assetClass) params.set("asset_class", this.assetClass);
+        if (this.sector) params.set("sector", this.sector);
+        params.set("limit", "100");
+        this.loading = true;
+        const mine = ++this.seq; // ignore answers to older queries that arrive late
+        screenerGet(`/stocks/search?${params}`)
+          .then((r) => { if (mine === this.seq) this.hits = r; })
+          .catch(() => { if (mine === this.seq) this.hits = []; })
+          .finally(() => { if (mine === this.seq) this.loading = false; });
+      },
+    };
+  }
+</script>
+{% endblock %}

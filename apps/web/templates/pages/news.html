@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{# Port of components/news/NewsItem.tsx; `a` is the article variable in the surrounding x-for. #}
+{% macro news_item(a) -%}
+<a :href="{{ a }}.url" target="_blank" rel="noreferrer" class="block card p-4 hover:border-accent/30 transition-colors">
+  <div class="flex items-start gap-3">
+    <template x-if="{{ a }}.thumbnail">
+      <img :src="{{ a }}.thumbnail" alt="" class="w-20 h-20 rounded object-cover bg-surface2">
+    </template>
+    <div class="min-w-0 flex-1">
+      <div class="flex items-center gap-2 text-xs text-muted">
+        <span x-text="{{ a }}.source ?? ''"></span>
+        <span>·</span>
+        <span x-text="newsTimeAgo({{ a }}.published_at)"></span>
+        <span :class="cn('ml-auto pill border', sentimentLabel({{ a }}.sentiment).cls)" x-text="sentimentLabel({{ a }}.sentiment).label"></span>
+      </div>
+      <div class="mt-1 text-sm font-medium line-clamp-2" x-text="{{ a }}.title"></div>
+      <template x-if="{{ a }}.summary">
+        <p class="mt-1 text-xs text-muted line-clamp-2" x-text="{{ a }}.summary"></p>
+      </template>
+      <div class="mt-2 h-1 rounded bg-surface2 overflow-hidden">
+        <div class="h-full bg-accent/60" :style="`width: ${newsImpact({{ a }}) * 100}%`"></div>
+      </div>
+      <div class="text-[10px] text-muted mt-1" x-text="`impact ${(newsImpact({{ a }}) * 100).toFixed(0)}`"></div>
+    </div>
+  </div>
+</a>
+{%- endmacro %}
+
+{% block content %}
+<div x-data="newsPage()" class="p-6 space-y-6">
+  <div>
+    <h1 class="text-2xl font-semibold tracking-tight">News</h1>
+    <p class="text-sm text-muted mt-1">Market news + lightweight sentiment scoring. Trending detection by sentiment magnitude.</p>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div class="lg:col-span-2 space-y-3">
+      <template x-for="a in (market ?? []).slice(0, 30)" :key="a.url">
+        {{ news_item("a") }}
+      </template>
+      <template x-if="marketLoaded && !market">
+        <div class="card p-6 text-sm text-muted">No news available.</div>
+      </template>
+    </div>
+    <div>
+      <div class="card">
+        <div class="card-header">Trending sentiment</div>
+        <ul class="divide-y divide-line">
+          <template x-for="t in (trending ?? [])" :key="t.symbol">
+            <li class="px-4 py-2 flex items-center justify-between">
+              <a :href="'/stocks/' + t.symbol" class="font-mono hover:text-accent" x-text="t.symbol"></a>
+              <div class="text-right">
+                <div :class="cn('text-sm tabular', changeColor(t.sentiment))" x-text="(t.sentiment * 100).toFixed(0)"></div>
+                <div class="text-[10px] text-muted" x-text="`${t.n_articles} articles`"></div>
+              </div>
+            </li>
+          </template>
+          <template x-if="trendingLoaded && (!trending || trending.length === 0)">
+            <li class="px-4 py-3 text-xs text-muted">No data yet.</li>
+          </template>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // The original was a server component: it fetched both lists before rendering
+  // and treated any failure as "no data" (null).
+  async function newsGet(path) {
+    try {
+      const r = await fetch(`/api${path}`, { cache: "no-store" });
+      if (!r.ok) return null;
+      return await r.json();
+    } catch {
+      return null;
+    }
+  }
+
+  function sentimentLabel(s) {
+    if (s == null) return { label: "neutral", cls: "text-muted border-line" };
+    if (s > 0.25) return { label: `bullish ${(s * 100).toFixed(0)}`, cls: "text-success border-success/40" };
+    if (s < -0.25) return { label: `bearish ${(s * 100).toFixed(0)}`, cls: "text-danger border-danger/40" };
+    return { label: "neutral", cls: "text-muted border-line" };
+  }
+
+  // NewsItem's timeAgo: accepts epoch seconds or any Date.parse-able string, shows seconds too.
+  function newsTimeAgo(d) {
+    if (!d) return "";
+    let ts;
+    if (typeof d === "number") ts = d * 1000;
+    else {
+      const n = Date.parse(String(d));
+      if (!Number.isFinite(n)) return "";
+      ts = n;
+    }
+    const diff = Math.max(0, Date.now() - ts) / 1000;
+    if (diff < 60) return `${Math.floor(diff)}s ago`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
+  }
+
+  function newsImpact(a) {
+    return Math.max(0, Math.min(1, a.impact_score ?? 0));
+  }
+
+  function newsPage() {
+    return {
+      market: null,
+      trending: null,
+      marketLoaded: false,
+      trendingLoaded: false,
+
+      init() {
+        newsGet("/news/market").then((r) => { this.market = r; this.marketLoaded = true; });
+        newsGet("/news/trending").then((r) => { this.trending = r; this.trendingLoaded = true; });
+      },
+    };
+  }
+</script>
+{% endblock %}

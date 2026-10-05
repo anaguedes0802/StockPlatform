@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div x-data="risingStarsPage()" class="p-6 space-y-6">
+  <div>
+    <h1 class="text-2xl font-semibold tracking-tight">Rising stars</h1>
+    <p class="text-sm text-muted mt-1">
+      Discover upcoming stocks via composite signals. Each pick shows <em>why</em> it scored.
+    </p>
+  </div>
+
+  <div class="card p-4 grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+    <div class="md:col-span-7 flex flex-wrap gap-2">
+      <template x-for="s in strategies" :key="s.key">
+        <button @click="strategy = s.key"
+                :class="cn('pill border inline-flex items-center gap-1.5',
+                           strategy === s.key ? 'border-accent text-accent bg-accent/10' : 'border-line text-muted hover:text-text')"
+                :title="s.description">
+          {# one wrapper per possible icon (an <i data-lucide> can't change name once rendered) #}
+          <template x-if="strategyIcon(s.key) === 'sparkles'"><span class="contents"><i data-lucide="sparkles" class="size-3.5"></i></span></template>
+          <template x-if="strategyIcon(s.key) === 'flame'"><span class="contents"><i data-lucide="flame" class="size-3.5"></i></span></template>
+          <template x-if="strategyIcon(s.key) === 'gem'"><span class="contents"><i data-lucide="gem" class="size-3.5"></i></span></template>
+          <span x-text="s.label"></span>
+        </button>
+      </template>
+    </div>
+    <label class="md:col-span-3 block text-xs">
+      <span class="block text-muted mb-1">Max market cap ($B)</span>
+      <input x-model="maxCap" placeholder="e.g. 100 to exclude mega-caps"
+             class="w-full bg-surface2 border border-line rounded px-2 py-1 tabular text-sm">
+    </label>
+    <button @click="load()" :disabled="busy" class="md:col-span-2 rounded bg-accent text-bg font-medium py-2 text-sm disabled:opacity-50"
+            x-text="busy ? 'Scoring…' : 'Refresh'"></button>
+  </div>
+
+  <template x-if="active">
+    <p class="text-xs text-muted" x-text="active.description"></p>
+  </template>
+
+  <template x-if="err">
+    <div class="card p-4 text-sm text-danger break-all" x-text="err"></div>
+  </template>
+
+  <template x-if="!busy && picks.length === 0 && !err">
+    <div class="card p-8 text-sm text-muted">No picks meet the criteria.</div>
+  </template>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <template x-for="(p, i) in picks" :key="p.symbol">
+      <div class="card">
+        <div class="card-header">
+          <div class="flex items-center gap-2">
+            <span class="pill bg-surface2 border border-line text-muted tabular" x-text="'#' + (i + 1)"></span>
+            <a :href="'/stocks/' + p.symbol" class="font-mono hover:text-accent" x-text="p.symbol"></a>
+            <span class="text-muted truncate max-w-[20ch]" x-text="p.name"></span>
+          </div>
+          <span :class="cn('pill border tabular', scoreBadgeCls(p.score))"
+                x-text="`score ${p.score >= 0 ? '+' : ''}${p.score.toFixed(2)}`"></span>
+        </div>
+
+        <div class="px-4 py-3 grid grid-cols-2 gap-3 text-sm">
+          <div>
+            <div class="text-xs text-muted">Price</div>
+            <div class="font-mono tabular" x-text="fmtNumber(p.last_price)"></div>
+          </div>
+          <div>
+            <div class="text-xs text-muted">Market cap</div>
+            <div class="font-mono tabular" x-text="p.market_cap ? `$${fmtCompact(p.market_cap)}` : '—'"></div>
+          </div>
+          <div>
+            <div class="text-xs text-muted">3M return</div>
+            <div :class="cn('font-mono tabular', changeColor(p.snapshot.ret_3m_pct))" x-text="fmtPct(p.snapshot.ret_3m_pct)"></div>
+          </div>
+          <div>
+            <div class="text-xs text-muted">RSI / News</div>
+            <div class="font-mono tabular" x-text="`${p.snapshot.rsi14.toFixed(0)} / ${p.snapshot.n_articles}`"></div>
+          </div>
+        </div>
+
+        <!-- ComponentBar -->
+        <template x-if="Object.keys(p.components).length > 0">
+          <div class="px-4 pb-2 space-y-1">
+            <template x-for="[k, v] in Object.entries(p.components)" :key="k">
+              <div class="flex items-center gap-2 text-[11px]">
+                <span class="text-muted w-28 truncate" x-text="k.replace(/_/g, ' ')"></span>
+                <div class="flex-1 h-1.5 bg-surface2 rounded relative overflow-hidden">
+                  <div class="absolute top-0 bottom-0 left-1/2 w-px bg-line"></div>
+                  <div :class="cn('absolute top-0 bottom-0', v >= 0 ? 'left-1/2 bg-accent/70' : 'right-1/2 bg-danger/70')"
+                       :style="`width: ${Math.min(50, Math.abs(v) * 50)}%`"></div>
+                </div>
+                <span :class="cn('font-mono tabular w-10 text-right', v >= 0 ? 'text-accent' : 'text-danger')"
+                      x-text="`${v >= 0 ? '+' : ''}${v.toFixed(2)}`"></span>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <template x-if="p.rationale.length > 0">
+          <ul class="px-4 pb-3 text-xs text-muted space-y-0.5">
+            <template x-for="(r, j) in p.rationale" :key="j">
+              <li x-text="'· ' + r"></li>
+            </template>
+          </ul>
+        </template>
+      </div>
+    </template>
+  </div>
+
+  <div class="text-[11px] text-muted">
+    Composite signals; not investment advice. Score blends momentum, technicals, news velocity &amp; sentiment, range position, and size preference. See `apps/api/app/services/screener.py` for weights.
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const RS_ICON = {
+    rising_stars: "sparkles",
+    breakouts: "flame",
+    value_with_catalyst: "gem",
+  };
+
+  function strategyIcon(key) {
+    return RS_ICON[key] ?? "sparkles";
+  }
+
+  function scoreBadgeCls(score) {
+    return score > 0.4 ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+      : score > 0.1 ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/30"
+      : score < -0.1 ? "bg-rose-500/10 text-rose-300 border-rose-500/30"
+      : "bg-surface2 text-muted border-line";
+  }
+
+  async function rsGet(path) {
+    const r = await fetch(`/api${path}`, { cache: "no-store" });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  }
+
+  function risingStarsPage() {
+    return {
+      strategies: [],
+      strategy: "rising_stars",
+      picks: [],
+      maxCap: "", // billions
+      busy: false,
+      err: null,
+
+      get active() {
+        return this.strategies.find((s) => s.key === this.strategy);
+      },
+
+      init() {
+        rsGet("/screener/strategies").then((r) => (this.strategies = r)).catch(() => {});
+        this.$watch("strategy", () => this.load());
+        this.load();
+      },
+
+      async load() {
+        this.busy = true;
+        this.err = null;
+        try {
+          const params = new URLSearchParams({ limit: "12" });
+          if (this.maxCap) params.set("max_market_cap", String(parseFloat(this.maxCap) * 1e9));
+          this.picks = await rsGet(`/screener/run/${this.strategy}?${params}`);
+        } catch (e) {
+          this.err = errMsg(e);
+        } finally {
+          this.busy = false;
+        }
+      },
+    };
+  }
+</script>
+{% endblock %}

@@ -1,0 +1,280 @@
+{% extends "base.html" %}
+
+{% macro stat(label, value) -%}
+<div class="card p-3">
+  <div class="text-[10px] uppercase tracking-wide text-muted">{{ label }}</div>
+  <div class="font-mono tabular text-lg mt-0.5" x-text="{{ value }}"></div>
+</div>
+{%- endmacro %}
+
+{# CopyCell: `s` is a JS expression for a CopyStat ({n, avg_excess_pct, hit_rate_pct, t_stat}) or null. #}
+{% macro copy_cell(s) -%}
+<template x-if="!{{ s }}">
+  <td class="px-3 py-2 text-right text-muted tabular">—</td>
+</template>
+<template x-if="{{ s }}">
+  <td class="px-3 py-2 text-right tabular" x-data="{ get s() { return {{ s }} } }">
+    <div :class="cn('font-mono', s.avg_excess_pct > 0 ? 'text-emerald-300' : 'text-rose-300')"
+         x-text="`${s.avg_excess_pct > 0 ? '+' : ''}${s.avg_excess_pct.toFixed(1)}%`"></div>
+    <div class="text-[10px] text-muted">
+      <span x-text="`${s.hit_rate_pct.toFixed(0)}% beat SPY · n=${s.n}`"></span><template x-if="s.t_stat != null"><span :class="Math.abs(s.t_stat) >= 2 ? 'text-text' : ''" x-text="` · t=${s.t_stat.toFixed(1)}`"></span></template>
+    </div>
+  </td>
+</template>
+{%- endmacro %}
+
+{% block content %}
+<div x-data="congressPage()" class="p-6 space-y-6">
+  <div class="flex items-end justify-between flex-wrap gap-3">
+    <div>
+      <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2">
+        <i data-lucide="landmark" class="size-6 text-accent"></i> Congress tracker
+      </h1>
+      <p class="text-sm text-muted mt-1 max-w-3xl">
+        Every stock trade US House members disclosed under the STOCK Act, parsed from the official House Clerk
+        filings, and what copying each member would actually have earned: buying the day after the filing
+        went public, compared with SPY over the same window.
+      </p>
+    </div>
+    <button @click="loadTracker()" class="rounded border border-line px-3 py-1.5 text-sm inline-flex items-center gap-1 hover:text-accent">
+      <span x-show="!loading" class="contents"><i data-lucide="refresh-cw" class="size-4"></i></span>
+      <span x-show="loading" class="contents"><i data-lucide="refresh-cw" class="size-4 animate-spin"></i></span>
+      Refresh
+    </button>
+  </div>
+
+  <template x-if="err">
+    <div class="card p-3 text-sm text-danger break-all" x-text="err"></div>
+  </template>
+  <template x-if="tracker && !tracker.available">
+    <div class="card p-4 text-sm text-muted" x-text="tracker.message ?? ''"></div>
+  </template>
+
+  <template x-if="st">
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {{ stat("Disclosed trades", "st.trades.toLocaleString()") }}
+      {{ stat("Members", "String(st.politicians)") }}
+      {{ stat("Coverage", "`${st.first_disclosure?.slice(0, 7) ?? '—'} → ${st.last_disclosure ?? '—'}`") }}
+      {{ stat("Filings parsed / paper", "`${st.filings_parsed} / ${st.filings_unparseable_paper}`") }}
+    </div>
+  </template>
+
+  <template x-if="tracker?.caveats">
+    <div class="card p-4 text-xs text-muted space-y-1.5">
+      <div class="flex items-center gap-1.5 text-text text-sm font-medium"><i data-lucide="info" class="size-4 text-accent"></i> Read before copying anyone</div>
+      <template x-if="tracker.method">
+        <p x-text="tracker.method"></p>
+      </template>
+      <ul class="list-disc pl-5 space-y-1">
+        <template x-for="(c, i) in tracker.caveats" :key="i">
+          <li x-text="c"></li>
+        </template>
+      </ul>
+    </div>
+  </template>
+
+  <template x-if="cards.length > 0">
+    <div class="card overflow-x-auto">
+      <div class="px-4 py-3 flex items-center justify-between flex-wrap gap-2 border-b border-line">
+        <div class="font-medium">Copy scorecards <span class="text-muted text-xs" x-text="`(last ${cards[0].window_years}y, ≥5 purchases)`"></span></div>
+        <div class="flex gap-1 text-xs">
+          <template x-for="[k, l] in SORTS" :key="k">
+            <button @click="sort = k"
+                    :class="cn('rounded px-2 py-1 border', sort === k ? 'border-accent text-accent' : 'border-line text-muted hover:text-text')"
+                    x-text="l"></button>
+          </template>
+        </div>
+      </div>
+      <table class="w-full text-sm">
+        <thead class="text-[11px] uppercase tracking-wide text-muted">
+          <tr class="border-b border-line">
+            <th class="px-3 py-2 text-left">Member</th>
+            <th class="px-3 py-2 text-right">Buys</th>
+            <th class="px-3 py-2 text-right">Lag</th>
+            <th class="px-3 py-2 text-right">Copy 3m vs SPY</th>
+            <th class="px-3 py-2 text-right">Copy 12m vs SPY</th>
+            <th class="px-3 py-2 text-left">Most bought</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="c in cards" :key="c.politician">
+            <tr @click="selected = selected === c.politician ? null : c.politician"
+                :class="cn('border-b border-line/40 last:border-0 cursor-pointer hover:bg-surface2', selected === c.politician && 'bg-surface2')">
+              <td class="px-3 py-2">
+                <div x-text="c.politician"></div>
+                <div :class="cn('text-[10px]', partyColor(c.party))" x-text="`${c.party || '?'}-${c.state}`"></div>
+              </td>
+              <td class="px-3 py-2 text-right tabular">
+                <span x-text="c.n_buys"></span><template x-if="c.n_option_buys > 0"><div class="text-[10px] text-muted" x-text="`${c.n_option_buys} options`"></div></template>
+              </td>
+              <td class="px-3 py-2 text-right tabular text-muted" x-text="`${c.median_disclosure_lag_days ?? '—'}d`"></td>
+              {{ copy_cell("c.copy_3m_vs_spy") }}
+              {{ copy_cell("c.copy_12m_vs_spy") }}
+              <td class="px-3 py-2 text-xs">
+                <template x-for="t in c.top_tickers" :key="t">
+                  <a :href="'/stocks/' + t" @click.stop class="mr-1.5 font-mono hover:text-accent" x-text="t"></a>
+                </template>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </template>
+
+  <div class="card">
+    <div class="px-4 py-3 flex items-center justify-between flex-wrap gap-2 border-b border-line">
+      <div class="font-medium">
+        <template x-if="selected">
+          <span>Trades by <span x-text="selected"></span> <button @click="selected = null" class="text-xs text-muted hover:text-accent ml-2">clear</button></span>
+        </template>
+        <template x-if="!selected">
+          <span>Disclosures, last 90 days</span>
+        </template>
+      </div>
+      <div class="flex items-center gap-2 text-xs">
+        <template x-for="s in ['all', 'buy', 'sell']" :key="s">
+          <button @click="side = s"
+                  :class="cn('rounded px-2 py-1 border capitalize', side === s ? 'border-accent text-accent' : 'border-line text-muted hover:text-text')"
+                  x-text="s === 'all' ? 'All' : s + 's'"></button>
+        </template>
+        <input x-model="ticker" placeholder="Ticker"
+               class="rounded border border-line bg-surface2 px-2 py-1 w-20 uppercase">
+      </div>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="text-[11px] uppercase tracking-wide text-muted">
+          <tr class="border-b border-line">
+            <th class="px-3 py-2 text-left">Disclosed</th>
+            <th class="px-3 py-2 text-left">Member</th>
+            <th class="px-3 py-2 text-left">Side</th>
+            <th class="px-3 py-2 text-left">Asset</th>
+            <th class="px-3 py-2 text-right">Amount</th>
+            <th class="px-3 py-2 text-right">Lag</th>
+            <th class="px-3 py-2"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-if="rows.length === 0">
+            <tr><td colspan="7" class="px-3 py-6 text-center text-muted text-xs">No trades match.</td></tr>
+          </template>
+          <template x-for="(t, i) in rows" :key="i">
+            <tr class="border-b border-line/40 last:border-0 align-top">
+              <td class="px-3 py-2 tabular text-muted whitespace-nowrap" x-text="t.disclosed_at ?? ''"></td>
+              <td class="px-3 py-2">
+                <button @click="selected = t.politician" class="hover:text-accent text-left" x-text="t.politician"></button>
+                <div :class="cn('text-[10px]', partyColor(t.party))" x-text="`${t.party ?? ''}${t.demo ? ' · demo' : ''}`"></div>
+              </td>
+              <td class="px-3 py-2">
+                <span :class="cn('pill border text-[11px] whitespace-nowrap',
+                        t.side === 'buy' ? 'border-emerald-500/40 text-emerald-300 bg-emerald-500/5'
+                          : t.side.startsWith('sell') ? 'border-rose-500/40 text-rose-300 bg-rose-500/5'
+                            : 'border-line text-muted')"
+                      x-text="`${t.side.replace('_', ' ')}${t.asset_type === 'OP' ? ' · opt' : ''}`"></span>
+              </td>
+              <td class="px-3 py-2">
+                <template x-if="t.symbol">
+                  <a :href="'/stocks/' + t.symbol" class="font-mono hover:text-accent" x-text="t.symbol"></a>
+                </template>
+                <template x-if="!t.symbol">
+                  <span class="text-muted text-xs">no ticker</span>
+                </template>
+                <div class="text-[11px] text-muted max-w-md truncate" :title="t.note ?? t.asset_name" x-text="t.note || t.asset_name || ''"></div>
+              </td>
+              <td class="px-3 py-2 text-right tabular text-xs whitespace-nowrap" x-text="t.amount_range"></td>
+              <td class="px-3 py-2 text-right tabular text-xs text-muted" x-text="`${lagDays(t) ?? '—'}d`"></td>
+              <td class="px-3 py-2 text-right">
+                <template x-if="t.source_url">
+                  <a :href="t.source_url" target="_blank" rel="noreferrer" class="text-muted hover:text-accent" title="Official filing">
+                    <i data-lucide="external-link" class="size-3.5"></i>
+                  </a>
+                </template>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const SORTS = [["n_buys", "Most active"], ["copy_3m", "Best 3m"], ["copy_12m", "Best 12m"]];
+
+  function partyColor(p) {
+    if (!p) return "text-muted";
+    if (p.startsWith("D")) return "text-sky-300";
+    if (p.startsWith("R")) return "text-rose-300";
+    return "text-muted";
+  }
+
+  function lagDays(t) {
+    if (!t.traded_at || !t.disclosed_at) return null;
+    return Math.round((Date.parse(t.disclosed_at) - Date.parse(t.traded_at)) / 86_400_000);
+  }
+
+  function congressPage() {
+    return {
+      tracker: null,
+      feed: [],
+      selected: null,
+      side: "all",
+      ticker: "",
+      sort: "n_buys",
+      err: null,
+      loading: true,
+      feedSeq: 0,
+
+      get st() {
+        return this.tracker?.status;
+      },
+
+      get cards() {
+        const list = [...(this.tracker?.scorecards ?? [])];
+        const val = (c) =>
+          this.sort === "n_buys" ? c.n_buys
+            : this.sort === "copy_3m" ? (c.copy_3m_vs_spy?.avg_excess_pct ?? -1e9)
+              : (c.copy_12m_vs_spy?.avg_excess_pct ?? -1e9);
+        return list.sort((a, b) => val(b) - val(a));
+      },
+
+      get rows() {
+        return this.feed.filter((t) =>
+          (this.side === "all" || (this.side === "buy" ? t.side === "buy" : t.side.startsWith("sell")))
+          && (!this.ticker || (t.symbol ?? "").toUpperCase().startsWith(this.ticker.toUpperCase())),
+        );
+      },
+
+      init() {
+        this.loadTracker();
+        this.loadFeed();
+        this.$watch("selected", () => this.loadFeed());
+      },
+
+      async loadTracker() {
+        this.loading = true;
+        this.err = null;
+        try {
+          this.tracker = await api.congressTracker();
+        } catch (e) {
+          this.err = errMsg(e);
+        } finally {
+          this.loading = false;
+        }
+      },
+
+      // One member's trades when a row is selected, otherwise the last 90 days.
+      // A newer selection cancels the answer of the previous one.
+      loadFeed() {
+        const mine = ++this.feedSeq;
+        const p = this.selected ? api.politicianTrades(this.selected, 300) : api.politiciansRecent(300, 90);
+        p.then((rows) => { if (mine === this.feedSeq) this.feed = rows; })
+          .catch((e) => { if (mine === this.feedSeq) this.err = errMsg(e); });
+      },
+    };
+  }
+</script>
+{% endblock %}

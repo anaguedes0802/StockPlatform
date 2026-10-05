@@ -1,0 +1,329 @@
+{% extends "base.html" %}
+
+{#
+  Category icon (Lucide name from CATEGORY_STYLES). An <i data-lucide> can't change
+  name once rendered, so render one wrapper per possible icon and keep the matching one.
+#}
+{% macro cat_icon(cat, cls) -%}
+<template x-if="catStyle({{ cat }}).icon === 'trending-up'"><span class="contents"><i data-lucide="trending-up" class="{{ cls }}"></i></span></template>
+<template x-if="catStyle({{ cat }}).icon === 'sparkles'"><span class="contents"><i data-lucide="sparkles" class="{{ cls }}"></i></span></template>
+<template x-if="catStyle({{ cat }}).icon === 'zap'"><span class="contents"><i data-lucide="zap" class="{{ cls }}"></i></span></template>
+<template x-if="catStyle({{ cat }}).icon === 'target'"><span class="contents"><i data-lucide="target" class="{{ cls }}"></i></span></template>
+{%- endmacro %}
+
+{# Port of OpportunityCard; `o` is the opportunity in the surrounding x-for. #}
+{% macro opportunity_card() -%}
+<a :href="'/stocks/' + o.symbol" class="card p-3 block hover:border-accent/50 transition-colors">
+  <div class="flex items-start justify-between gap-2">
+    <div class="flex flex-col">
+      <div class="flex items-center gap-2">
+        <span class="font-mono font-medium text-text" x-text="o.symbol"></span>
+        <span :class="cn('pill border inline-flex items-center gap-1 text-[10px]', catStyle(o.best_category).cls)">
+          {{ cat_icon("o.best_category", "size-3") }}
+          <span x-text="o.best_category"></span>
+        </span>
+      </div>
+      <template x-if="o.name">
+        <span class="text-xs text-muted truncate" x-text="o.name"></span>
+      </template>
+    </div>
+    <div class="text-right">
+      <div class="text-lg font-mono tabular text-accent"
+           :title="`Thesis ${o.raw_score.toFixed(2)} × entry ${o.entry_quality.toFixed(2)}${o.narrative ? ` × narrative ${o.narrative_alignment.toFixed(2)}` : ''}`"
+           x-text="o.score.toFixed(2)"></div>
+      <div class="text-[10px] text-muted tabular"
+           x-text="`thesis ${o.raw_score.toFixed(2)} · entry ${o.entry_quality.toFixed(2)}${o.narrative ? ` · driver ${o.narrative_alignment.toFixed(2)}` : ''}`"></div>
+      <template x-if="o.in_strategies.length > 1">
+        <div class="text-[10px] text-muted" x-text="`×${o.in_strategies.length} signals`"></div>
+      </template>
+    </div>
+  </div>
+
+  <template x-if="o.catalyst?.category">
+    <div class="mt-2 px-2 py-1 rounded bg-rose-500/10 border border-rose-500/30">
+      <div class="text-[10px] uppercase text-rose-300 tracking-wide">
+        <span x-text="`Catalyst: ${o.catalyst.category}`"></span><template x-if="o.catalyst.materiality != null"><span class="ml-1 text-rose-400" x-text="`mat ${o.catalyst.materiality.toFixed(2)}`"></span></template>
+      </div>
+      <template x-if="o.catalyst.headline">
+        <div class="text-[11px] text-text mt-0.5 line-clamp-2" x-text="o.catalyst.headline"></div>
+      </template>
+    </div>
+  </template>
+
+  <div class="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-muted tabular">
+    <template x-if="o.last_price != null"><span x-text="`$${fmtNumber(o.last_price)}`"></span></template>
+    <template x-if="o.rsi14 != null">
+      <span :class="cn(o.rsi14 > 75 ? 'text-rose-300' : o.rsi14 < 40 ? 'text-amber-300' : 'text-muted')"
+            x-text="`RSI ${o.rsi14.toFixed(0)}`"></span>
+    </template>
+    <template x-if="o.momentum_1m_pct != null">
+      <span :class="changeColor(o.momentum_1m_pct)" x-text="`1M ${fmtPct(o.momentum_1m_pct)}`"></span>
+    </template>
+    <template x-if="o.momentum_3m_pct != null">
+      <span :class="changeColor(o.momentum_3m_pct)" x-text="`3M ${fmtPct(o.momentum_3m_pct)}`"></span>
+    </template>
+    <template x-if="o.pct_off_52w_high != null">
+      <span :class="o.pct_off_52w_high < 3 ? 'text-rose-300' : 'text-muted'"
+            x-text="`-${o.pct_off_52w_high.toFixed(1)}% from 52w high`"></span>
+    </template>
+    <template x-if="o.market_cap != null && o.market_cap > 0">
+      <span x-text="`$${(o.market_cap / 1e9).toFixed(1)}B mkt`"></span>
+    </template>
+    <template x-if="o.pe != null"><span x-text="`PE ${o.pe.toFixed(1)}`"></span></template>
+  </div>
+
+  <template x-if="o.rationale.length > 0">
+    <ul class="mt-2 space-y-0.5 text-[11px] text-muted">
+      <template x-for="(r, i) in o.rationale.slice(0, 3)" :key="i">
+        <li x-text="'· ' + r"></li>
+      </template>
+    </ul>
+  </template>
+
+  <template x-if="o.entry_notes.length > 0">
+    <div :class="cn('mt-2 px-2 py-1 rounded border text-[10px]',
+                    o.entry_quality < 0.5 ? 'bg-rose-500/5 border-rose-500/30 text-rose-300'
+                      : o.entry_quality < 0.85 ? 'bg-amber-500/5 border-amber-500/30 text-amber-300'
+                      : 'bg-emerald-500/5 border-emerald-500/30 text-emerald-300')">
+      <div class="font-medium mb-0.5" x-text="`Entry quality ${(o.entry_quality * 100).toFixed(0)}%`"></div>
+      <template x-for="(n, i) in o.entry_notes.slice(0, 2)" :key="i">
+        <div x-text="'· ' + n"></div>
+      </template>
+    </div>
+  </template>
+
+  <template x-if="o.narrative && (o.narrative.notes.length > 0 || o.narrative.conflicts.length > 0)">
+    <div :class="cn('mt-2 px-2 py-1 rounded border text-[10px]',
+                    o.narrative_alignment < 0.6 ? 'bg-rose-500/5 border-rose-500/30 text-rose-300'
+                      : o.narrative_alignment < 0.95 ? 'bg-amber-500/5 border-amber-500/30 text-amber-300'
+                      : 'bg-emerald-500/5 border-emerald-500/30 text-emerald-300')">
+      <div class="font-medium mb-0.5 flex items-center gap-1">
+        <i data-lucide="alert-circle" class="size-3"></i>
+        <span x-text="`${o.narrative.driver_label ?? ''} thesis · alignment ${(o.narrative_alignment * 100).toFixed(0)}%`"></span>
+      </div>
+      <template x-for="(n, i) in o.narrative.notes.slice(0, 2)" :key="i">
+        <div x-text="'· ' + n"></div>
+      </template>
+      <template x-for="(c, i) in o.narrative.conflicts.slice(0, 1)" :key="'c' + i">
+        <div class="mt-0.5 italic line-clamp-2" x-text="'⚠ ' + c.title"></div>
+      </template>
+    </div>
+  </template>
+</a>
+{%- endmacro %}
+
+{% block content %}
+<div x-data="opportunitiesPage()" class="p-6 max-w-7xl mx-auto space-y-4">
+  <div class="flex items-end justify-between gap-4 flex-wrap">
+    <div>
+      <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2">
+        <i data-lucide="target" class="size-6 text-accent"></i>
+        Live Opportunity Feed
+      </h1>
+      <p class="text-sm text-muted mt-1 max-w-2xl">
+        Ongoing hunt across 6 strategies — growth (rising stars), value
+        (underpriced movers, value+catalyst), event-driven (catalyst plays),
+        and technical (smart-money, breakouts). Each name's score is the
+        best lens it scores well on, with a confluence bonus when it scores
+        well on multiple. Strategies are weighted by how their past picks did
+        against SPY. Refreshed by the background scanner every ~5 min during
+        US market hours.
+      </p>
+    </div>
+    <div class="flex items-center gap-2 text-xs text-muted">
+      <template x-if="data?.as_of">
+        <span class="tabular">
+          <span x-text="`as of ${new Date(data.as_of).toLocaleTimeString()}`"></span><template x-if="data.cached"><span class="ml-1 text-[10px] opacity-60">(cached)</span></template>
+        </span>
+      </template>
+      <button @click="refresh(true)" :disabled="loading"
+              class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-line hover:bg-surface2 disabled:opacity-50"
+              title="Force a fresh scan — slow (30–60s)">
+        <span x-show="!loading" class="contents"><i data-lucide="refresh-cw" class="size-3.5"></i></span>
+        <span x-show="loading" class="contents"><i data-lucide="refresh-cw" class="size-3.5 animate-spin"></i></span>
+        Re-scan
+      </button>
+    </div>
+  </div>
+
+  <template x-if="err">
+    <div class="card p-3 border-rose-500/40 bg-rose-500/5 text-xs text-rose-300">
+      <i data-lucide="alert-circle" class="size-3.5 inline mr-1.5"></i>
+      <span x-text="err"></span>
+    </div>
+  </template>
+
+  <!-- StrategyRecord: validation banner + per-strategy weights -->
+  <template x-if="data && (data.validation?.message || data.strategy_weights)">
+    <div :class="cn('card p-4 space-y-3', data.validation?.validated ? '' : 'border-amber-500/40 bg-amber-500/5')">
+      <template x-if="data.validation?.message">
+        <div :class="cn('text-xs flex items-start gap-1.5', data.validation.validated ? 'text-muted' : 'text-amber-200')">
+          <i data-lucide="alert-circle" class="size-3.5 mt-0.5 shrink-0"></i>
+          <span><span x-text="data.validation.message"></span> <a href="/track-record" class="underline hover:text-accent">Track record →</a></span>
+        </div>
+      </template>
+      <template x-if="weightRows.length > 0">
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs">
+            <thead class="text-[10px] uppercase tracking-wide text-muted">
+              <tr class="border-b border-line">
+                <th class="text-left py-1.5 pr-3">Strategy</th>
+                <th class="text-right py-1.5 px-2">4w vs SPY</th>
+                <th class="text-right py-1.5 px-2">12w vs SPY</th>
+                <th class="text-right py-1.5 px-2">Beat SPY (12w)</th>
+                <th class="text-right py-1.5 px-2">Weeks of data</th>
+                <th class="text-right py-1.5 pl-2">Weight</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="[name, r] in weightRows" :key="name">
+                <tr class="border-b border-line/40 last:border-0">
+                  <td class="py-1.5 pr-3 font-mono" x-text="name"></td>
+                  <td :class="cn('py-1.5 px-2 text-right tabular', changeColor(r.avg_vs_spy_4w ?? 0))" x-text="pct(r.avg_vs_spy_4w)"></td>
+                  <td :class="cn('py-1.5 px-2 text-right tabular', changeColor(r.avg_vs_spy_12w ?? 0))" x-text="pct(r.avg_vs_spy_12w)"></td>
+                  <td class="py-1.5 px-2 text-right tabular text-muted" x-text="r.beat_spy_rate_12w != null ? `${r.beat_spy_rate_12w}%` : '—'"></td>
+                  <td class="py-1.5 px-2 text-right tabular text-muted" x-text="r.weeks_of_evidence ?? 0"></td>
+                  <td class="py-1.5 pl-2 text-right tabular" :title="`prior ${r.prior} × learned ${r.multiplier}`"
+                      x-text="`×${r.effective.toFixed(2)}`"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+          <p class="text-[10px] text-muted mt-2">
+            Weight = neutral prior × a multiplier learned from how this list&apos;s own picks did against SPY. It moves in
+            proportion to the weeks of independent evidence, so early numbers barely change the ranking.
+          </p>
+        </div>
+      </template>
+    </div>
+  </template>
+
+  <template x-if="!data && loading">
+    <div class="card p-8 text-center text-sm text-muted">
+      <i data-lucide="refresh-cw" class="size-5 text-accent animate-spin mx-auto mb-2"></i>
+      Running 6-strategy scan…
+    </div>
+  </template>
+
+  <template x-if="data && data.opportunities.length === 0">
+    <div class="card p-8 text-center text-sm text-muted">
+      No opportunities currently meet the threshold. The next background scan runs in ~5 min.
+    </div>
+  </template>
+
+  <!-- Top picks banner (score ≥ 0.6) -->
+  <template x-if="topPicks.length > 0">
+    <div class="card p-4 bg-accent/5 border-accent/30">
+      <div class="text-[11px] uppercase tracking-wide text-accent font-medium mb-2 flex items-center gap-1.5">
+        <i data-lucide="sparkles" class="size-3.5"></i>
+        <span x-text="`${data?.validation?.validated ? 'High-conviction' : 'Highest scores'} (score ≥ 0.60)`"></span>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <template x-for="o in topPicks" :key="o.symbol">
+          <a :href="'/stocks/' + o.symbol"
+             class="inline-flex items-center gap-2 rounded-md bg-surface2 hover:bg-surface px-2.5 py-1.5 text-xs border border-line">
+            <span class="font-mono font-medium text-text" x-text="o.symbol"></span>
+            <span class="tabular text-accent" x-text="o.score.toFixed(2)"></span>
+            <span class="text-muted">·</span>
+            <span class="text-muted text-[10px]" x-text="o.best_category"></span>
+          </a>
+        </template>
+      </div>
+    </div>
+  </template>
+
+  <!-- Per-category sections -->
+  <template x-for="cat in orderedCategories" :key="cat">
+    <div class="space-y-2">
+      <div class="flex items-center gap-2">
+        {{ cat_icon("cat", "size-4 text-accent") }}
+        <h2 class="text-sm font-medium uppercase tracking-wide text-text" x-text="cat"></h2>
+        <span class="text-xs text-muted" x-text="`(${(grouped[cat] || []).length})`"></span>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        <template x-for="o in (grouped[cat] || [])" :key="o.symbol">
+          {{ opportunity_card() }}
+        </template>
+      </div>
+    </div>
+  </template>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const CATEGORY_STYLES = {
+    "Growth":            { cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40", icon: "trending-up" },
+    "Value + Catalyst":  { cls: "bg-amber-500/15 text-amber-300 border-amber-500/40",       icon: "sparkles" },
+    "Event":             { cls: "bg-rose-500/15 text-rose-300 border-rose-500/40",          icon: "zap" },
+    "Technical":         { cls: "bg-sky-500/15 text-sky-300 border-sky-500/40",             icon: "target" },
+    "Value":             { cls: "bg-purple-500/15 text-purple-300 border-purple-500/40",    icon: "target" },
+  };
+
+  function catStyle(cat) {
+    return CATEGORY_STYLES[cat] || CATEGORY_STYLES["Technical"];
+  }
+
+  function pct(v) {
+    if (v == null) return "—";
+    return `${v > 0 ? "+" : ""}${v.toFixed(1)}%`;
+  }
+
+  function opportunitiesPage() {
+    return {
+      data: null,
+      loading: false,
+      err: null,
+      timer: null,
+
+      init() {
+        this.refresh();
+        // Poll every 60s for fresh data — server caches for 10min so most refreshes are cheap
+        this.timer = setInterval(() => this.refresh(), 60_000);
+      },
+
+      destroy() {
+        clearInterval(this.timer);
+      },
+
+      async refresh(force = false) {
+        this.loading = true;
+        this.err = null;
+        try {
+          const r = await fetch(`/api/opportunities${force ? "/scan" : "?limit=40"}`, {
+            method: force ? "POST" : "GET",
+            cache: "no-store",
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          this.data = await r.json();
+        } catch (e) {
+          this.err = errMsg(e);
+        } finally {
+          this.loading = false;
+        }
+      },
+
+      // Strategy weights, best first.
+      get weightRows() {
+        return Object.entries(this.data?.strategy_weights ?? {}).sort((a, b) => b[1].effective - a[1].effective);
+      },
+
+      // Group by best_category
+      get grouped() {
+        const g = {};
+        for (const o of this.data?.opportunities || []) (g[o.best_category] ||= []).push(o);
+        return g;
+      },
+
+      get orderedCategories() {
+        const g = this.grouped;
+        return ["Event", "Growth", "Value + Catalyst", "Value", "Technical"].filter((c) => g[c]?.length);
+      },
+
+      get topPicks() {
+        return (this.data?.opportunities || []).filter((o) => o.score >= 0.6).slice(0, 5);
+      },
+    };
+  }
+</script>
+{% endblock %}

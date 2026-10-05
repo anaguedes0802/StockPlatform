@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+
+{% macro stat(label, value, cls="''") -%}
+<div class="bg-surface2 rounded px-3 py-2">
+  <div class="text-[10px] uppercase tracking-wide text-muted">{{ label }}</div>
+  <div :class="cn('font-mono tabular text-base mt-0.5', {{ cls }})" x-text="{{ value }}"></div>
+</div>
+{%- endmacro %}
+
+{% block content %}
+<div x-data="calibrationPage()" class="p-6 space-y-6">
+  <div>
+    <h1 class="text-2xl font-semibold tracking-tight">Forecast accuracy</h1>
+    <p class="text-sm text-muted mt-1">
+      How accurate has the platform been? Every forecast we issue is persisted; when its target date passes, we score it. This page is the honest scoreboard.
+    </p>
+  </div>
+
+  <template x-if="loaded && (!d || d.overall.n === 0)">
+    <div class="card p-8 text-sm text-muted">
+      <p class="mb-2">No scored predictions yet.</p>
+      <p>
+        The platform starts persisting forecasts the first time someone calls <code>/ai/forecast</code> for a symbol.
+        After the target dates pass, scoring runs automatically. Visit a stock page → AI panel to generate some forecasts,
+        then come back in a few days/weeks.
+      </p>
+      <p class="mt-2">
+        For honest baseline numbers from walk-forward backtesting (not requiring matured forecasts), see
+        <a href="/stocks/AAPL" class="text-accent">a stock page</a> or BACKTEST_RESULTS.md.
+      </p>
+    </div>
+  </template>
+
+  <!-- React fragment: an inner space-y-6 keeps the same spacing -->
+  <template x-if="loaded && d && d.overall.n > 0">
+    <div class="space-y-6">
+      <div class="card p-4">
+        <div class="text-xs uppercase tracking-wide text-muted mb-1" x-text="`Overall — last ${d.lookback_days} days`"></div>
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+          {{ stat("N scored", "String(d.overall.n)") }}
+          {{ stat("Hit rate (direction)", "`${(d.overall.hit_rate_direction * 100).toFixed(1)}%`",
+                  "d.overall.hit_rate_direction >= 0.5 ? 'text-success' : 'text-warning'") }}
+          {{ stat("MAE (log-ret)", "fmtNumber(d.overall.mae_logret, 4)") }}
+          {{ stat("p10-p90 coverage", "`${(d.overall.coverage_p10_p90 * 100).toFixed(0)}%`",
+                  "Math.abs(d.overall.coverage_p10_p90 - 0.8) < 0.1 ? 'text-success' : 'text-warning'") }}
+          {{ stat("Bias (mean err)", "fmtNumber(d.overall.bias_mean, 4)", "changeColor(d.overall.bias_mean)") }}
+        </div>
+        <p class="text-[11px] text-muted mt-2">
+          Coverage target ≈ 80% means well-calibrated uncertainty bands. Bias near 0 means no systematic over/under-shoot.
+        </p>
+      </div>
+
+      <template x-if="Object.keys(d.per_horizon).length > 0">
+        <div class="card">
+          <div class="card-header">Per horizon</div>
+          <table class="w-full text-sm">
+            <thead class="text-xs uppercase tracking-wide text-muted border-b border-line">
+              <tr>
+                <th class="text-left px-4 py-2">Horizon</th>
+                <th class="text-right px-4 py-2">N</th>
+                <th class="text-right px-4 py-2">Hit rate</th>
+                <th class="text-right px-4 py-2">MAE</th>
+                <th class="text-right px-4 py-2">Coverage</th>
+                <th class="text-right px-4 py-2">Bias</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="[h, s] in Object.entries(d.per_horizon)" :key="h">
+                <tr class="border-b border-line last:border-0">
+                  <td class="px-4 py-2 font-mono" x-text="h"></td>
+                  <td class="px-4 py-2 text-right tabular" x-text="s.n"></td>
+                  <td :class="cn('px-4 py-2 text-right tabular', s.hit_rate_direction >= 0.5 ? 'text-success' : 'text-warning')"
+                      x-text="`${(s.hit_rate_direction * 100).toFixed(1)}%`"></td>
+                  <td class="px-4 py-2 text-right tabular" x-text="fmtNumber(s.mae_logret, 4)"></td>
+                  <td class="px-4 py-2 text-right tabular" x-text="`${(s.coverage_p10_p90 * 100).toFixed(0)}%`"></td>
+                  <td :class="cn('px-4 py-2 text-right tabular', changeColor(s.bias_mean))" x-text="fmtNumber(s.bias_mean, 4)"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </template>
+
+      <template x-if="d.recent_scored.length > 0">
+        <div class="card overflow-x-auto">
+          <div class="card-header" x-text="`Recent scored predictions (${d.recent_scored.length})`"></div>
+          <table class="w-full text-xs">
+            <thead class="text-muted border-b border-line">
+              <tr>
+                <th class="text-left px-4 py-2">Symbol</th>
+                <th class="text-left px-4 py-2">Horizon</th>
+                <th class="text-left px-4 py-2">Target</th>
+                <th class="text-right px-4 py-2">Pred</th>
+                <th class="text-right px-4 py-2">Real</th>
+                <th class="text-right px-4 py-2">Δ logret</th>
+                <th class="text-right px-4 py-2">Direction</th>
+                <th class="text-right px-4 py-2">In band</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="p in d.recent_scored.slice(0, 30)" :key="p.id">
+                <tr class="border-b border-line/40 last:border-0">
+                  <td class="px-4 py-1.5 font-mono">
+                    <a :href="'/stocks/' + p.symbol" class="hover:text-accent" x-text="p.symbol"></a>
+                  </td>
+                  <td class="px-4 py-1.5 font-mono" x-text="p.horizon"></td>
+                  <td class="px-4 py-1.5" x-text="p.target_ts.slice(0, 10)"></td>
+                  <td class="px-4 py-1.5 text-right tabular" x-text="fmtNumber(p.predicted)"></td>
+                  <td class="px-4 py-1.5 text-right tabular" x-text="fmtNumber(p.realized)"></td>
+                  <td :class="cn('px-4 py-1.5 text-right tabular', changeColor(p.actual_logret))"
+                      x-text="`${p.actual_logret >= 0 ? '+' : ''}${(p.actual_logret * 100).toFixed(2)}%`"></td>
+                  <td :class="cn('px-4 py-1.5 text-right', p.direction_correct ? 'text-success' : 'text-danger')"
+                      x-text="p.direction_correct ? '✓' : '✗'"></td>
+                  <td :class="cn('px-4 py-1.5 text-right', p.in_p10_p90 ? 'text-success' : 'text-warning')"
+                      x-text="p.in_p10_p90 ? '✓' : '✗'"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </template>
+    </div>
+  </template>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // The original was a server component: one fetch before render, any failure = null.
+  async function calibrationGet(path) {
+    try {
+      const r = await fetch(`/api${path}`, { cache: "no-store" });
+      if (!r.ok) return null;
+      return await r.json();
+    } catch {
+      return null;
+    }
+  }
+
+  function calibrationPage() {
+    return {
+      d: null,
+      loaded: false,
+
+      async init() {
+        this.d = await calibrationGet("/ai/calibration?lookback_days=365");
+        this.loaded = true;
+      },
+    };
+  }
+</script>
+{% endblock %}
