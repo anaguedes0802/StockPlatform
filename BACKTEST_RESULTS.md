@@ -1051,7 +1051,7 @@ didn't exist when the design was fixed.
 
 ## Setup
 
-Created by `scripts/setup_rsi2_ab_test.py` for the platform user `1@1.com`.
+Created by `scripts/setup_rsi2_ab_test.py` for the local platform user (the email is a script argument).
 Both bots are tagged `experiment: rsi2_ml_filter_ab`.
 
 | | Control | Treatment |

@@ -5,6 +5,8 @@
 
 This document is the source of truth for system design. It covers all 15 deliverables. Code in this repo is a runnable foundation that implements the **bold-italicized** pieces; everything else is specified well enough to implement incrementally.
 
+> **Status note (October 2026).** This is the design written at the start of the project and it describes the *target* architecture. Several pieces are still design only (separate microservices, MLflow, NATS, Celery, Kubernetes, Timescale hypertables). The [README](./README.md) lists what is implemented and what the experiments found. One change from the original plan: the web UI is now a Python app (FastAPI + Jinja2 templates + Tailwind + Alpine.js, no Node toolchain) instead of Next.js; see [§14](#14-frontend-architecture--ux).
+
 ---
 
 ## Table of contents
@@ -47,7 +49,7 @@ This document is the source of truth for system design. It covers all 15 deliver
 
 ```
                           ┌──────────────────────┐
-                          │     Next.js Web      │  (App Router, RSC, Tailwind)
+                          │   Web UI (Python)    │  (FastAPI + Jinja2, Tailwind, Alpine.js)
                           │  TradingView Charts  │
                           └──────────┬───────────┘
                                      │  HTTPS / WSS
@@ -80,7 +82,7 @@ This document is the source of truth for system design. It covers all 15 deliver
 
 | Service | Language | Purpose |
 |---|---|---|
-| `web` | TypeScript / Next.js | UI, SSR, BFF passthroughs, websocket consumer |
+| `web` | Python / FastAPI + Jinja2 | Server-rendered pages, `/api` BFF proxy, websocket consumer |
 | `api` | Python / FastAPI | Auth, REST/WS gateway, business logic, portfolio, auth, user data |
 | `market-data` | Python | Provider adapters (yfinance/polygon/finnhub/alpha vantage), caching, normalization, websocket fan-out |
 | `ml-service` | Python | Forecasting, explainability, ensemble, drift detection |
@@ -115,14 +117,14 @@ StockPlatform/
 ├── docker-compose.yml               # postgres, redis, api, web (+ optional mlflow, minio, nats)
 ├── .env.example                     # required env vars
 ├── apps/
-│   ├── web/                         # Next.js 15 (App Router, Server Components, Tailwind)
-│   │   ├── app/                     # routes
-│   │   │   ├── (marketing)/page.tsx
-│   │   │   ├── dashboard/page.tsx
-│   │   │   ├── stocks/[symbol]/page.tsx
-│   │   │   ├── portfolio/page.tsx
-│   │   │   ├── strategy-lab/page.tsx
-│   │   │   ├── ai-chat/page.tsx
+│   ├── web/                         # Python web UI: FastAPI + Jinja2 templates, Tailwind, Alpine.js
+│   │   ├── app/                     # page routes (nav.py) + /api proxy (main.py)
+│   │   ├── templates/pages/         # one template per page
+│   │   │   ├── dashboard.html
+│   │   │   ├── stock.html
+│   │   │   ├── portfolio.html
+│   │   │   ├── strategy_lab.html
+│   │   │   ├── ai_chat.html
 │   │   │   └── api/[...path]/route.ts   # BFF proxy
 │   │   ├── components/
 │   │   │   ├── chart/CandlestickChart.tsx
@@ -894,14 +896,14 @@ SSE over HTTP. Frontend renders intermediate tool calls as collapsible "thinking
 
 ### Stack
 
-- **Next.js 15** (App Router, React Server Components, route handlers as BFF)
-- **TypeScript** strict
-- **Tailwind CSS** + a shadcn/ui-style component set (Radix primitives)
-- **TanStack Query** for client cache (over fetch to /api BFF proxy)
+- **FastAPI + Jinja2** serve one server-rendered template per page and proxy `/api/*` to the backend (same origin, no CORS)
+- **Tailwind CSS** (Play CDN, same theme tokens as the original design)
+- **Alpine.js** for interactivity (state, fetches, live updates) directly in the HTML, with no build step
 - **TradingView Lightweight Charts** (MIT) for candlestick + indicator overlays
-- **Recharts** for everything non-financial (portfolio donuts, performance lines)
-- **Zustand** for ephemeral UI state (sidebar collapsed, active timeframe)
-- **next-auth** (or **Auth.js**) when wired up
+- **Chart.js** for everything non-financial (portfolio donuts, equity and comparison lines)
+- **JWT** access/refresh tokens from the API, kept in `localStorage`
+
+*Originally planned and first built as Next.js 15 + React; rebuilt as a Python app so the project needs no Node toolchain (the browser still runs small Alpine.js snippets).*
 
 ### Pages
 
@@ -959,7 +961,7 @@ We lean heavily on best-in-class OSS so we're not reinventing.
 | Experiment tracking | [`MLflow`](https://github.com/mlflow/mlflow) | Apache-2.0 | Model registry, runs |
 | Feature store (later) | [`Feast`](https://github.com/feast-dev/feast) | Apache-2.0 | Online/offline parity |
 | Time-series DB | TimescaleDB (Postgres ext) | Apache-2.0 / TSL | Cheap, familiar SQL |
-| Auth | Auth.js (Next), `python-jose` + `passlib[bcrypt]` (FastAPI) | MIT | |
+| Auth | `python-jose` + `passlib[bcrypt]` + `pyotp` (FastAPI) | MIT | |
 | Observability | OpenTelemetry, Prometheus, Grafana, Loki | Apache-2.0 | |
 | Container | Docker, docker-compose v2; Helm for prod | | |
 

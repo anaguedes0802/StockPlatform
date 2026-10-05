@@ -1,8 +1,8 @@
 """Create the RSI(2) ML-filter A/B paper test: two identical bots, filter on/off.
 
 Usage (repo root):
-    apps/api/.venv/bin/python scripts/setup_rsi2_ab_test.py --email 1@1.com
-    apps/api/.venv/bin/python scripts/setup_rsi2_ab_test.py --email 1@1.com --dry-run
+    apps/api/.venv/bin/python scripts/setup_rsi2_ab_test.py --email you@example.com
+    apps/api/.venv/bin/python scripts/setup_rsi2_ab_test.py --email you@example.com --dry-run
 
 Idempotent: bots already tagged with the experiment for that user are left
 alone. Both bots:
